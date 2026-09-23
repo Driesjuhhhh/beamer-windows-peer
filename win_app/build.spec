@@ -1,0 +1,43 @@
+from pathlib import Path
+
+
+source_dir = Path(SPECPATH)
+
+analysis = Analysis(
+    [str(source_dir / "kvm_bridge_win.py")],
+    pathex=[str(source_dir)],
+    binaries=[],
+    datas=[(str(source_dir / "Beamer.ico"), "."), (str(source_dir / "assets"), "assets"), (str(source_dir.parent / "VERSION"), ".")],
+    hiddenimports=["cryptography"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["PIL", "pystray", "tkinter", "numpy", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia"],
+    noarchive=False,
+)
+
+python_archive = PYZ(analysis.pure)
+
+executable = EXE(
+    python_archive,
+    analysis.scripts,
+    analysis.binaries,
+    analysis.datas,
+    [],
+    name="Beamer",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=str(source_dir / "Beamer.ico"),
+    # Embeds a requireAdministrator manifest so the receiver always runs elevated.
+    # Windows UIPI silently drops SendInput events aimed at a focused elevated
+    # window (e.g. an admin terminal) when the sender isn't elevated too.
+    uac_admin=True,
+)

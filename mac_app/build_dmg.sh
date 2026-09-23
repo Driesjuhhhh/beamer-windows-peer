@@ -1,0 +1,174 @@
+#!/bin/bash
+# Builds Beamer.app and Beamer.dmg.
+#
+#   ./build_dmg.sh            local build in mac_app/dist, signed with the same Developer ID identity
+#   ./build_dmg.sh --release  Developer ID, notarised and stapled, written to
+#                             docs/beamer-releases/<version>/ beside the repository, with nothing left in dist
+#
+# The version is the repo-root VERSION file and the build number is the commit count, so a release
+# rebuilt from the same commit carries the same numbers. Nothing here uploads anywhere but Apple's
+# notary service.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP="$SCRIPT_DIR/dist/Beamer.app"
+DMG="$SCRIPT_DIR/dist/Beamer.dmg"
+RELEASE=0
+case "${1:-}" in
+    "") ;;
+    --release) RELEASE=1 ;;
+    *) echo "usage: $0 [--release]" >&2; exit 2 ;;
+esac
+
+STAGING_DIR="$(mktemp -d /private/tmp/Beamer.build.XXXXXX)"
+cleanup() {
+    rm -rf "$STAGING_DIR"
+    # A release is copied out, so the staged app goes: Spotlight would offer it beside the installed one.
+    if [ "$RELEASE" -eq 1 ]; then rm -rf "$SCRIPT_DIR/build" "$SCRIPT_DIR/dist"; fi
+}
+trap cleanup EXIT
+
+cd "$SCRIPT_DIR"
+if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+else
+    export DEVELOPER_DIR="/Library/Developer/CommandLineTools"
+fi
+VERSION="$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")"
+export BEAMER_BUILD="$(git -C "$PROJECT_DIR" rev-list --count HEAD)"
+
+xcrun clang --version
+
+if [ "$RELEASE" -eq 1 ]; then
+    # docs/ is not part of the build and other sessions write there; anything else uncommitted would
+    # ship code that no commit records.
+    if [ -n "$(git -C "$PROJECT_DIR" status --porcelain -- . ':(exclude)docs')" ]; then
+        echo "uncommitted changes outside docs/ - commit them so the release matches a commit" >&2
+        exit 1
+    fi
+    IDENTITY="Developer ID Application: Toby Kalkman (YNL35YT683)"
+    KEY_DIR="$HOME/.appstoreconnect"
+    KEY_ID="$(cat "$KEY_DIR/key_id")"
+    [ -f "$KEY_DIR/private_keys/AuthKey_$KEY_ID.p8" ] && [ -s "$KEY_DIR/issuer_id" ] \
+        || { echo "the pinned App Store Connect key is missing from $KEY_DIR" >&2; exit 1; }
+    RELEASE_DIR="$(cd "$PROJECT_DIR/.." && pwd)/docs/beamer-releases/$VERSION"
+    echo "Release build of Beamer $VERSION ($BEAMER_BUILD) from $(git -C "$PROJECT_DIR" rev-parse --short HEAD)"
+else
+    # The release identity too: macOS keys the privacy grants to it, so a local install over a
+    # release keeps Accessibility and Input Monitoring instead of silently losing them.
+    IDENTITY="${BEAMER_SIGN_IDENTITY:-Developer ID Application: Toby Kalkman (YNL35YT683)}"
+    echo "Local build of Beamer $VERSION ($BEAMER_BUILD); not for release distribution"
+fi
+
+if [ ! -x ".venv/bin/python3" ]; then
+    python3 -m venv .venv
+fi
+.venv/bin/python3 -m pip install -q -r requirements-mac.txt
+
+rm -rf "$SCRIPT_DIR/build" "$SCRIPT_DIR/dist"
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python3 -B setup.py py2app
+
+PY2APP_DIR="$(.venv/bin/python3 -c 'from pathlib import Path; import py2app; print(Path(py2app.__file__).parent)')"
+clang -O2 -arch arm64 -mmacosx-version-min=13.0 "$PY2APP_DIR/apptemplate/src/main.c" -framework Cocoa -o "$APP/Contents/MacOS/Beamer"
+
+xattr -cr "$APP"
+
+# PyObjC's wheels carry dSYM debug symbols, which py2app copies into the zipped stdlib. They are
+# Mach-O files nothing loads, and codesign cannot reach inside a zip to sign them.
+find "$APP" -name '*.dSYM' -prune -exec rm -rf {} +
+for archive in "$APP"/Contents/Resources/lib/python3*.zip; do
+    zip -q -d "$archive" '*.dSYM/*' || [ $? -eq 12 ]
+done
+
+# Every build runs under the hardened runtime, so a local build breaks the way a notarised one would.
+# Only a release takes a secure timestamp: notarisation requires it, and it needs Apple's server.
+if [ "$RELEASE" -eq 1 ]; then TIMESTAMP="--timestamp"; else TIMESTAMP="--timestamp=none"; fi
+
+# Inside-out rather than --deep: every nested Mach-O (the Python framework, the extension modules,
+# cryptography's _rust, the helper python) is signed on its own, then the framework, then the bundle,
+# whose signature seals the lot. --identifier pins the bundle id, which must never change - the
+# privacy grants are keyed to it.
+sign_app() {
+    local identity="$1" binary
+    find "$APP/Contents" -type f ! -path "$APP/Contents/MacOS/Beamer" -print0 \
+        | xargs -0 file | grep 'Mach-O' | grep -v '(for architecture' | cut -d: -f1 > "$STAGING_DIR/nested.txt"
+    while IFS= read -r binary; do
+        codesign --force --sign "$identity" --options runtime $TIMESTAMP "$binary" || return 1
+    done < "$STAGING_DIR/nested.txt"
+    codesign --force --sign "$identity" --options runtime $TIMESTAMP \
+        "$APP/Contents/Frameworks/Python.framework/Versions/"[0-9]* || return 1
+    codesign --force --sign "$identity" --options runtime $TIMESTAMP \
+        --identifier uk.co.kalkman.beamer "$APP" || return 1
+}
+
+# A real identity is stable across rebuilds, so macOS keeps the Accessibility and Input Monitoring
+# grants; an ad-hoc signature is a new code identity every build and silently drops them.
+# A local build falls back to ad-hoc because the login keychain cannot be unlocked from a session
+# driven over SSH (errSecInternalComponent), and losing the whole build to that would be worse.
+# A release never falls back.
+# Not grep -q anywhere here: it exits at the first match, and pipefail then reads the writer's SIGPIPE
+# as failure.
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -F "$IDENTITY" >/dev/null; then
+    [ "$RELEASE" -eq 1 ] && { echo "$IDENTITY is not in the keychain" >&2; exit 1; }
+    echo "$IDENTITY is not in the keychain - signing ad-hoc instead"
+    TIMESTAMP="--timestamp=none"
+    sign_app -
+elif ! sign_app "$IDENTITY" 2>"$STAGING_DIR/sign.log"; then
+    [ "$RELEASE" -eq 1 ] && { cat "$STAGING_DIR/sign.log" >&2; exit 1; }
+    echo "the login keychain would not release $IDENTITY - signing ad-hoc instead"
+    TIMESTAMP="--timestamp=none"
+    sign_app -
+fi
+codesign --verify --deep --strict --verbose=2 "$APP"
+codesign -dvv "$APP" 2>&1 | grep -E '^(Identifier|Signature|Authority|Timestamp|CodeDirectory)' || true
+
+# The bundle's own python runs under the same hardened runtime as the app, so code that needs an
+# entitlement fails here rather than at a user's first launch.
+env -i HOME="$HOME" PATH=/usr/bin:/bin PYTHONHOME="$APP/Contents/Resources" \
+    "$APP/Contents/MacOS/python" "$PROJECT_DIR/tools/runtime_probe.py"
+
+notarise() {
+    local result="$STAGING_DIR/notary.json" id status
+    xcrun notarytool submit "$1" --key "$KEY_DIR/private_keys/AuthKey_$KEY_ID.p8" --key-id "$KEY_ID" \
+        --issuer "$(cat "$KEY_DIR/issuer_id")" --wait --output-format json > "$result" || true
+    id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id", ""))' "$result")"
+    status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$result")"
+    echo "Notary service: $status for $(basename "$1") ($id)"
+    if [ "$status" != "Accepted" ]; then
+        [ -n "$id" ] && xcrun notarytool log "$id" --key "$KEY_DIR/private_keys/AuthKey_$KEY_ID.p8" \
+            --key-id "$KEY_ID" --issuer "$(cat "$KEY_DIR/issuer_id")" >&2
+        exit 1
+    fi
+}
+
+# The app is notarised and stapled before it goes into the image, so the copy a user drags out
+# carries its own ticket; the image then gets a submission of its own.
+if [ "$RELEASE" -eq 1 ]; then
+    ditto -c -k --keepParent "$APP" "$STAGING_DIR/Beamer.zip"
+    notarise "$STAGING_DIR/Beamer.zip"
+    xcrun stapler staple "$APP"
+fi
+
+mkdir "$STAGING_DIR/image"
+cp -R "$APP" "$STAGING_DIR/image/"
+cp "$SCRIPT_DIR/Beamer Tunnel.command" "$STAGING_DIR/image/"
+ln -s /Applications "$STAGING_DIR/image/Applications"
+rm -f "$DMG"
+diskutil image create from --format UDZO --volumeName "Beamer" "$STAGING_DIR/image" "$DMG"
+
+if [ "$RELEASE" -eq 1 ]; then
+    codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+    notarise "$DMG"
+    xcrun stapler staple "$DMG"
+    xcrun stapler validate "$APP"
+    xcrun stapler validate "$DMG"
+    spctl -a -vv "$APP"
+    spctl -a -vv -t install "$DMG"
+    mkdir -p "$RELEASE_DIR"
+    cp "$DMG" "$RELEASE_DIR/Beamer.dmg"
+    echo "Released Beamer $VERSION ($BEAMER_BUILD) at $RELEASE_DIR/Beamer.dmg"
+else
+    echo "Built Beamer $VERSION ($BEAMER_BUILD) at $DMG"
+fi

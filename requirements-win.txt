@@ -1,0 +1,3 @@
+# win_receiver.py only uses the Python standard library (socket, ctypes) —
+# no third-party packages required. This file is kept for symmetry with
+# requirements-mac.txt and as a place to add deps later if needed.

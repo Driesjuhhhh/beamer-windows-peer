@@ -1,0 +1,17 @@
+{
+  "host": "192.168.1.20",
+  "port": 24820,
+  "auth_token": "CHANGE_ME",
+  "trigger_key": "alt_r",
+  "double_tap_ms": 300,
+  "key_map": {
+    "cmd": "ctrl",
+    "cmd_r": "ctrl",
+    "ctrl": "cmd",
+    "ctrl_r": "cmd",
+    "alt": "alt",
+    "alt_r": "alt"
+  },
+  "reconnect_interval_s": 2.0,
+  "edge_glow": true
+}
