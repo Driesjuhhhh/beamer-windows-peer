@@ -759,6 +759,8 @@ class ControlWindow(AppKit.NSObject):
         # Set by TrayApp once it exists: the listener for the PC's input, and
         # the second way an arrangement changed here can reach the PC.
         self.windows_input = None
+        # Set by TrayApp: saves one direction's switch, as its menu ticks do.
+        self.direction_handler = None
         self.last_capture_attempt = 0.0
         # Set by TrayApp: the beacon listener whose PCs the Pair module lists.
         self.discovery = None
@@ -1175,7 +1177,38 @@ class ControlWindow(AppKit.NSObject):
             [self._keyboard_module(), self._pause_module()], bottom_rule=False, gap=theme.MODULE_GAP, fill=None
         )
         widgets.add(body, self.daily.view)
+        widgets.add(body, self._directions_module().view)
         widgets.add(body, self._login_module().view)
+
+    @objc.python_method
+    def _directions_module(self):
+        """The menu bar's two ticks, here too, as the PC has them on its Overview: either
+        direction can be switched off while the other keeps working."""
+        module = widgets.Module(spacing=10)
+        module.add(widgets.eyebrow("Directions"))
+        self.send_switch = widgets.Switch(
+            "This Mac drives Windows", on_change=lambda on: self._set_direction(send_to_windows=on)
+        )
+        module.add(self.send_switch.view)
+        self.receive_switch = widgets.Switch(
+            "Windows drives this Mac", on_change=lambda on: self._set_direction(allow_windows_to_drive=on)
+        )
+        module.add(self.receive_switch.view)
+        self._show_directions()
+        return module
+
+    @objc.python_method
+    def _set_direction(self, **change):
+        if self.direction_handler is not None:
+            self.direction_handler(**change)
+        self._show_directions()
+
+    @objc.python_method
+    def _show_directions(self):
+        cfg = self.controller.cfg
+        for switch, value in ((self.send_switch, cfg.send_to_windows), (self.receive_switch, cfg.allow_windows_to_drive)):
+            if switch.value != bool(value):
+                switch.value = value
 
     @objc.python_method
     def _login_module(self):
@@ -2023,6 +2056,7 @@ class ControlWindow(AppKit.NSObject):
     @objc.python_method
     def refresh(self):
         controller = self.controller
+        self._show_directions()
         access = accessibility_granted()
         listening = input_monitoring_granted()
         self._permission(self.access_status, self.access_button, access)
@@ -2160,6 +2194,7 @@ class TrayApp(rumps.App):
             controller, settings_store, logger
         )
         self.control_window.quit_handler = self.quit_app
+        self.control_window.direction_handler = self._set_direction
         install_main_menu(self.control_window)
         self.gesture_overlay = GestureOverlay(controller, logger)
         self.edge_glow = EdgeGlow(controller, logger)

@@ -322,11 +322,13 @@ class InputRecorder(QPushButton):
         Qt.MouseButton.ForwardButton: "forward",
     }
 
-    def __init__(self, title: str, on_record, hook_vk, parent: QWidget | None = None) -> None:
+    def __init__(self, title: str, on_record, hook_vk, parent: QWidget | None = None, keys_only: bool = False) -> None:
         super().__init__(parent)
         self.title = title
         self.on_record = on_record
         self.hook_vk = hook_vk
+        # The trigger is a key: a mouse button while it records cancels, as on the Mac.
+        self.keys_only = keys_only
         self.armed = False
         self.left_ctrl_held = False
         self.setProperty("vernier", "keycap")
@@ -344,6 +346,13 @@ class InputRecorder(QPushButton):
         row.addWidget(self.key, 1)
         row.addWidget(self.hint, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.clicked.connect(self._toggle)
+
+    def set_title(self, title: str) -> None:
+        """What the keycap says while it is not recording: the trigger recorder shows its key."""
+        self.title = title
+        self.setAccessibleName(title)
+        if not self.armed:
+            self.key.setText(title)
 
     def cancel(self) -> None:
         self.left_ctrl_held = False
@@ -391,7 +400,7 @@ class InputRecorder(QPushButton):
             return True
         if kind == QEvent.Type.MouseButtonPress:
             name = self.BUTTONS.get(event.button())
-            if name is None:
+            if name is None or self.keys_only:
                 # The left button disarms, and the press goes where it was aimed -- except onto
                 # this keycap, where it would arm it again.
                 inside = isinstance(watched, QWidget) and (watched is self or self.isAncestorOf(watched))

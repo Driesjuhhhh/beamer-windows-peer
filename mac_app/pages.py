@@ -8,7 +8,7 @@ from __future__ import annotations
 # (key, name, SF Symbol, what the page is for), in sidebar order; Cmd+1 is the first.
 PAGES = (
     ("overview", "Overview", "gauge.with.needle",
-     "Where input is, whether the link is up, and the two controls you reach for every day."),
+     "Where input is, whether the link is up, and the controls you reach for every day."),
     ("crossing", "Crossing", "cursorarrow.motionlines",
      "How the pointer passes from this Mac to Windows, and how hard the edge pushes back first."),
     ("design", "Design", "paintpalette",

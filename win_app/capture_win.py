@@ -331,7 +331,10 @@ class Trigger:
         if name != self.key:
             return False
         if self.style == "hold":
-            return True
+            # Except a release at home that the trigger never pressed: the key went down before
+            # it became the trigger -- recorded in Hold, it is still held as it is recorded -- so
+            # Windows has its key-down and must see it let go.
+            return down or self._held or redirecting
         if not down and self._release_owed:
             self._release_owed = False
             return True

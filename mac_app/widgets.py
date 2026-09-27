@@ -961,6 +961,11 @@ class Ruler:
             self.on_change(value)
 
 
+# Loaded if a config names them, never offered by the recorder, as on Windows: typing keys a
+# double-tap or a hold would take from every app.
+UNRECORDABLE_TRIGGERS = {"enter", "tab", "space", "backspace", "esc"}
+
+
 class KeyRecorder:
     """A keycap that records the next key pressed as the trigger. Clicking arms it; the next key
     or modifier press that Beamer can use as a trigger becomes the value, anything else cancels.
@@ -1010,7 +1015,7 @@ class KeyRecorder:
         # A key Beamer cannot use as a trigger cancels, so the previous value is what shows.
         name = SPECIAL_KEY_NAMES.get(int(event.keyCode()))
         self._stop()
-        if name in KEY_NAME_TO_CODE:
+        if name in KEY_NAME_TO_CODE and name not in UNRECORDABLE_TRIGGERS:
             self.set_value(name)
             if self.on_change is not None:
                 self.on_change(name)

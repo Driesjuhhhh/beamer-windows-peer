@@ -1,88 +1,21 @@
-"""Wake-on-LAN for the PC, and the controller that sends it when a switch finds the PC asleep.
-
-The hardware address is never typed. It is read from this Mac's ARP table whenever a
-connection succeeds -- the Mac has just exchanged packets with the PC, so the entry is fresh --
-and stored with the rest of that PC's settings.
+"""The controller that wakes the PC when a switch finds it asleep. The packet, the ARP lookup and
+the address parsing are in wol.py, shared with the Windows app, which wakes this Mac the same way.
 """
 
 from __future__ import annotations
 
-import re
-import socket
-import subprocess
 import threading
 
-from bridge import KVMController
+from bridge import AUTH_FAILED_STATUS, KVMController
+from wol import WAKE_WINDOW_SECONDS, lookup_mac, mac_from_arp_output, magic_packet, parse_mac, send_magic_packet
 
-WOL_PORT = 9
-# Sleep answers in a few seconds; hibernate and a cold boot take most of a minute. Past this
-# the PC is reported as not woken rather than the switch waiting forever.
-WAKE_WINDOW_SECONDS = 60.0
+__all__ = [
+    "NOT_WOKEN_STATUS", "WAKE_WINDOW_SECONDS", "WAKING_STATUS", "WakingController",
+    "lookup_mac", "mac_from_arp_output", "magic_packet", "parse_mac", "send_magic_packet",
+]
+
 WAKING_STATUS = "Waking Windows…"
 NOT_WOKEN_STATUS = "Windows did not wake"
-
-# Six groups of one or two hex digits: Windows pads and joins with "-", macOS leaves a leading
-# zero off and joins with ":".
-_MAC_PATTERN = re.compile(r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{1,2}(?:[:-][0-9A-Fa-f]{1,2}){5})(?![0-9A-Fa-f])")
-
-
-def parse_mac(text: str):
-    """The address as six upper-case, zero-padded pairs joined with ":", or None."""
-    match = _MAC_PATTERN.fullmatch(text.strip()) if isinstance(text, str) else None
-    if match is None:
-        return None
-    return ":".join(part.zfill(2).upper() for part in re.split(r"[:-]", match.group(1)))
-
-
-def mac_from_arp_output(output: str, ip: str):
-    """The hardware address `arp` printed for `ip`, from either platform's layout:
-
-        Windows   192.168.1.3           02-1a-2b-3c-0d-4e     dynamic
-        macOS     ? (192.168.1.3) at 2:1a:2b:3c:d:4e on en0 ifscope [ethernet]
-    """
-    ip_pattern = re.compile(r"(?<![\d.])" + re.escape(ip) + r"(?![\d.])")
-    for line in output.splitlines():
-        if not ip_pattern.search(line):
-            continue
-        match = _MAC_PATTERN.search(line)
-        if match is not None:
-            return parse_mac(match.group(1))
-    return None
-
-
-def lookup_mac(host: str):
-    """The hardware address this Mac's ARP table holds for `host`, or None. Only useful right
-    after talking to the host, which is the only time it is called."""
-    try:
-        ip = socket.gethostbyname(host)
-        completed = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=3.0, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return mac_from_arp_output(completed.stdout, ip)
-
-
-def magic_packet(mac: str) -> bytes:
-    address = parse_mac(mac)
-    if address is None:
-        raise ValueError(f"not a hardware address: {mac!r}")
-    return b"\xff" * 6 + bytes.fromhex(address.replace(":", "")) * 16
-
-
-def send_magic_packet(mac: str, host: str = None) -> None:
-    """Broadcast the packet, and also send it straight at the host's last address, which is
-    what gets through on a network that filters broadcasts."""
-    packet = magic_packet(mac)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.sendto(packet, ("255.255.255.255", WOL_PORT))
-        if host:
-            try:
-                sock.sendto(packet, (host, WOL_PORT))
-            except OSError:
-                pass
-    finally:
-        sock.close()
 
 
 class WakingController(KVMController):
@@ -122,10 +55,16 @@ class WakingController(KVMController):
         return bool(self.cfg.mac_address) and not self.connected
 
     def set_redirecting(self, value, edge=None, offset=None):
-        if value and not self.redirecting and not self.connected and self.cfg.mac_address:
+        if value and not self.redirecting and not self.connected and self.cfg.mac_address and not self._refused():
             self.wake()
             return False
         return super().set_redirecting(value, edge, offset)
+
+    def _refused(self) -> bool:
+        """A PC that answered and refused -- the token, or the protocol version -- is awake, and
+        waking it would hide why; the switch says the refusal instead."""
+        status = self._connection_status or ""
+        return status == AUTH_FAILED_STATUS or "protocol v" in status or "older Beamer" in status
 
     def wake(self) -> bool:
         """Sends the packet and starts waiting, unless a wake is already in flight."""

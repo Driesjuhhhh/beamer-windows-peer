@@ -41,6 +41,7 @@ setup(
         "theme",
         "tokens",
         "wake",
+        "wol",
         "widgets",
         "windows_input",
     ],

@@ -37,6 +37,7 @@ from app_config import (
     ConfigError,
     TRIGGER_KEYS,
     TRIGGER_VKS,
+    UNRECORDABLE_TRIGGER_VKS,
     default_config,
     default_config_path,
     load_config,
@@ -45,6 +46,7 @@ from app_config import (
 )
 import autostart_win
 import capture_win
+import desktop_win
 from edge_glow import EdgeGlow, GlowPreview as EdgeGlowPreview, PreviewLoop
 import firewall_win
 import ignored
@@ -103,6 +105,14 @@ CORNER_CHOICES = (
     ("bottom_right", "Bottom-right"),
 )
 TRIGGER_STYLE_CHOICES = (("double_tap", "Double-tap"), ("hold", "Hold"))
+MODIFIER_STYLE_CHOICES = (("semantic", "Semantic"), ("positional", "Positional"))
+MODIFIER_NOTES = {
+    "semantic": "Ctrl arrives on the Mac as Command and the Windows key as Control, so Ctrl+C "
+    "copies there too.",
+    "positional": "Each key arrives as the Mac key in the same place: Ctrl as Control, the Windows "
+    "key as Command.",
+}
+FULL_SCREEN_CHECK_MS = 1000
 GLOW_STYLE_CHOICES = (("glow", "Glow"), ("beam", "Beam"))
 GLOW_COLOUR_CHOICES = (
     ("signal", "Signal"),
@@ -183,6 +193,8 @@ class StatusBridge(QObject):
     learned = Signal(str, object, object)
     # Either link, telling us the two machines' arrangement changed at the other end.
     arrangement = Signal(str, int)
+    alert = Signal(str, str)
+    mac_learned = Signal(str)
 
 
 class WindowsApplication(QWidget):
@@ -234,6 +246,10 @@ class WindowsApplication(QWidget):
             arrangement_callback=self.bridge.arrangement.emit,
         )
         self.sender.send_peer_home = self.server.send_home
+        self.sender.on_alert = self.bridge.alert.emit
+        self.sender.on_mac_learned = self.bridge.mac_learned.emit
+        self.bridge.alert.connect(self._on_alert)
+        self.bridge.mac_learned.connect(self._on_mac_learned)
         self.hooks = capture_win.Hooks(self._on_hook_key, self.sender.on_mouse, self.sender.on_motion)
         self._trigger = capture_win.Trigger()
         self._sending_detail = "Not connected to the Mac"
@@ -260,6 +276,10 @@ class WindowsApplication(QWidget):
         self.refresh_timer.setInterval(250)
         self.refresh_timer.timeout.connect(self._refresh_window)
         self.refresh_timer.start()
+        self.full_screen_timer = QTimer(self)
+        self.full_screen_timer.setInterval(FULL_SCREEN_CHECK_MS)
+        self.full_screen_timer.timeout.connect(self._check_full_screen)
+        self.full_screen_timer.start()
         # Otherwise the heading, the "Input:"/"Now:" readouts and the sidebar dots sit blank
         # for the first 250ms every launch, waiting for the timer's first tick.
         self._refresh_window()
@@ -351,12 +371,14 @@ class WindowsApplication(QWidget):
         self.sidebar.select(key)
         if key != "keyboard":
             self.ignored_recorder.cancel()
+            self.trigger_recorder.cancel()
         self._run_previews()
 
     # -- Overview ---------------------------------------------------------------------------
 
     def _overview_page(self, layout, current) -> None:
         layout.addWidget(self._link_module())
+        layout.addWidget(self._input_module())
         layout.addWidget(self._daily_module(current))
 
     def _link_module(self) -> QWidget:
@@ -378,7 +400,77 @@ class WindowsApplication(QWidget):
         self.location_readout = widgets.label("", "readout", wrap=True)
         where_row.addWidget(self.location_readout, 1)
         module.body.addLayout(where_row)
+        # Shown only while there is a figure: the trip is measured while input is on the Mac.
+        self.round_trip_row = QWidget()
+        trip_row = QHBoxLayout(self.round_trip_row)
+        trip_row.setContentsMargins(0, 0, 0, 0)
+        trip_row.setSpacing(6)
+        trip_row.addWidget(widgets.label("Round trip:", "note"))
+        self.round_trip_readout = widgets.label("", "readout", wrap=True)
+        trip_row.addWidget(self.round_trip_readout, 1)
+        self.round_trip_row.setVisible(False)
+        module.body.addWidget(self.round_trip_row)
         return module
+
+    def _input_module(self) -> QWidget:
+        """The Mac's two everyday buttons: send input across without the shortcut or an edge, and
+        hold the edges for a while."""
+        module = widgets.Module("Keyboard and mouse")
+        self.redirect_button = QPushButton("Send input to your Mac")
+        self.redirect_button.setProperty("vernier", "primary")
+        self.redirect_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.redirect_button.clicked.connect(self.toggle_redirect)
+        module.body.addWidget(self.redirect_button)
+        self.pause_button = QPushButton("Pause crossing")
+        self.pause_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        module.body.addWidget(self.pause_button)
+        self.crossing_state = widgets.label("", "note", wrap=True)
+        module.body.addWidget(self.crossing_state)
+        return module
+
+    def toggle_redirect(self) -> None:
+        self.sender.toggle()
+
+    def toggle_pause(self) -> None:
+        self.sender.crossing_paused = not self.sender.crossing_paused
+        self._refresh_window()
+
+    def _crossing_state_sentence(self) -> str:
+        methods = set(self._config.crossing_methods) if self._config is not None else set()
+        if not methods & {"edge", "corner"}:
+            return "Only the shortcut is switched on; there is nothing to pause."
+        if self.sender.crossing_paused:
+            return "Paused. The edge and corner do nothing until you resume; the shortcut still works."
+        if self.sender.full_screen_app is not None:
+            return (
+                f"Off while {self.sender.full_screen_app} is full screen, so the pointer stays put at "
+                "the edges; the shortcut still works."
+            )
+        return "On. Pause it to lean on an edge without switching."
+
+    def _check_full_screen(self) -> None:
+        """The Mac's rule: a full-screen app in front holds the edges, the shortcut still works.
+        A failure stops the check for the run rather than logging once a second."""
+        try:
+            self.sender.full_screen_app = desktop_win.full_screen_app()
+        except Exception:
+            self.sender.full_screen_app = None
+            self.full_screen_timer.stop()
+            LOGGER.exception("Could not tell whether an app is full screen; crossing stays on")
+
+    def _on_alert(self, title: str, message: str) -> None:
+        if self._closing:
+            return
+        if message.startswith("Cannot switch"):
+            QApplication.beep()
+        self.tray.showMessage(title, message, QIcon(str(ICON_PATH)), 4000)
+
+    def _on_mac_learned(self, address: str) -> None:
+        if self._config is None or self._config.mac_hardware_address == address:
+            return
+        self._config.mac_hardware_address = address
+        self._persist()
 
     def _daily_module(self, current: Config) -> QWidget:
         module = widgets.Module("Every day")
@@ -495,6 +587,12 @@ class WindowsApplication(QWidget):
         module.body.addWidget(self.corner_choice.view)
         self.corner_choice.set_enabled("corner" in current.crossing_methods)
 
+        self.dragging_switch = widgets.Switch("Never while dragging")
+        self.dragging_switch.setFont(theme.font(theme.TYPE["body"]))
+        self.dragging_switch.setChecked(current.block_while_dragging)
+        self.dragging_switch.toggled.connect(self._set_block_while_dragging)
+        module.body.addWidget(self.dragging_switch)
+
         now_row = QHBoxLayout()
         now_row.setSpacing(6)
         # Named, not just "Now": this line is the Mac's half of the border --
@@ -529,6 +627,13 @@ class WindowsApplication(QWidget):
         self.sender.update_config(self._config)
         self._reflect_look()
 
+    def _set_block_while_dragging(self, enabled: bool) -> None:
+        if self._config is None:
+            return
+        self._config.block_while_dragging = bool(enabled)
+        self._persist()
+        self.sender.update_config(self._config)
+
     def _set_corner(self, corner: str) -> None:
         if self._config is None:
             return
@@ -559,7 +664,7 @@ class WindowsApplication(QWidget):
         row = QHBoxLayout()
         row.setSpacing(10)
         self.resistance_slider = QSlider(Qt.Orientation.Horizontal)
-        self.resistance_slider.setRange(0, 300)
+        self.resistance_slider.setRange(0, 500)
         self.resistance_slider.setValue(current.crossing_resistance_px)
         self.resistance_slider.valueChanged.connect(self._resistance_changed)
         row.addWidget(self.resistance_slider, 1)
@@ -594,6 +699,25 @@ class WindowsApplication(QWidget):
     def _keyboard_page(self, layout, current: Config) -> None:
         layout.addWidget(self._shortcut_module(current))
         layout.addWidget(self._ignored_module(current))
+        layout.addWidget(self._modifier_module(current))
+
+    def _modifier_module(self, current: Config) -> QWidget:
+        module = widgets.Module("Modifier keys")
+        self.modifier_choice = widgets.Choice(
+            MODIFIER_STYLE_CHOICES, columns=2, current=current.modifier_style, on_change=self._set_modifier_style
+        )
+        module.body.addWidget(self.modifier_choice.view)
+        self.modifier_note = widgets.label(MODIFIER_NOTES[current.modifier_style], "note", wrap=True)
+        module.body.addWidget(self.modifier_note)
+        return module
+
+    def _set_modifier_style(self, value: str) -> None:
+        self.modifier_note.setText(MODIFIER_NOTES[value])
+        if self._config is None:
+            return
+        self._config.modifier_style = value
+        self._persist()
+        self.sender.update_config(self._config)
 
     def _ignored_module(self, current: Config) -> QWidget:
         module = widgets.Module("Stays on this PC")
@@ -672,10 +796,18 @@ class WindowsApplication(QWidget):
                 "Use this key to send input to your Mac, and to bring it back.", "note", wrap=True
             )
         )
-        self.trigger_key_choice = widgets.Choice(
-            tuple(TRIGGER_KEYS.items()), columns=2, current=current.trigger_key, on_change=self._set_trigger_key
+        self.trigger_recorder = widgets.InputRecorder(
+            TRIGGER_KEYS.get(current.trigger_key, current.trigger_key),
+            self._record_trigger,
+            capture_win.hook_vk,
+            keys_only=True,
         )
-        module.body.addWidget(self.trigger_key_choice.view)
+        self.trigger_recorder.HINT = "Click, then press the key"
+        self.trigger_recorder.hint.setText(self.trigger_recorder.HINT)
+        module.body.addWidget(self.trigger_recorder)
+        self.trigger_note = widgets.label("", "note-amber", wrap=True)
+        self.trigger_note.setVisible(False)
+        module.body.addWidget(self.trigger_note)
         self.trigger_style_choice = widgets.Choice(
             TRIGGER_STYLE_CHOICES, columns=2, current=current.trigger_style, on_change=self._set_trigger_style
         )
@@ -685,7 +817,8 @@ class WindowsApplication(QWidget):
         row = QHBoxLayout()
         row.setSpacing(10)
         self.double_tap_slider = QSlider(Qt.Orientation.Horizontal)
-        self.double_tap_slider.setRange(150, 600)
+        # The Mac's range: the store takes 50 to 2000 ms, but only about 150 to 600 is useful.
+        self.double_tap_slider.setRange(50, 1000)
         self.double_tap_slider.setValue(current.double_tap_ms)
         self.double_tap_slider.valueChanged.connect(self._double_tap_changed)
         row.addWidget(self.double_tap_slider, 1)
@@ -696,12 +829,29 @@ class WindowsApplication(QWidget):
         self._update_style_hint(current.trigger_style)
         return module
 
-    def _set_trigger_key(self, value: str) -> None:
+    def _record_trigger(self, kind: str, value) -> None:
+        """Any key that types nothing, as on the Mac: a modifier, a function key, a navigation
+        key. A key that types a character would stop typing it, so it is refused, and said so."""
+        name = None
+        if kind == "key" and value not in UNRECORDABLE_TRIGGER_VKS:
+            name = next((n for n, vk in TRIGGER_VKS.items() if vk == value), None)
+        if name is None:
+            self.trigger_note.setText(
+                "That key cannot be the shortcut. Choose a modifier such as Right Ctrl, a function "
+                "key, or a key like Insert or Scroll Lock."
+            )
+            self.trigger_note.setVisible(True)
+            return
+        self.trigger_note.setVisible(False)
+        self.trigger_recorder.set_title(TRIGGER_KEYS[name])
         if self._config is None:
             return
-        self._config.trigger_key = value
+        self._config.trigger_key = name
         self._persist()
         self._configure_trigger(self._config)
+        if ignored.key(value) in self._config.ignored_inputs:
+            # The shortcut always stays with Beamer, so it cannot also be on the stays-here list.
+            self._set_ignored([entry for entry in self._config.ignored_inputs if entry != ignored.key(value)])
 
     def _set_trigger_style(self, value: str) -> None:
         if self._config is None:
@@ -1166,6 +1316,10 @@ class WindowsApplication(QWidget):
         self.open_action.triggered.connect(self.show_window)
         self.status_action = menu.addAction(self._title())
         self.status_action.setEnabled(False)
+        self.redirect_action = menu.addAction("Send input to your Mac")
+        self.redirect_action.triggered.connect(self.toggle_redirect)
+        self.pause_action = menu.addAction("Pause crossing")
+        self.pause_action.triggered.connect(self.toggle_pause)
         menu.addSeparator()
         # One tick per direction, each the same switch the Overview page shows, so either
         # direction can be turned off while the other keeps working and the two never disagree.
@@ -1180,6 +1334,8 @@ class WindowsApplication(QWidget):
         self.drive_action.setChecked(self.allow_switch.isChecked())
         self.send_action.setChecked(self.send_switch.isChecked())
         menu.addSeparator()
+        menu.addAction("Reload configuration").triggered.connect(self.reload_config)
+        menu.addSeparator()
         menu.addAction("About Beamer").triggered.connect(self.show_about)
         menu.addAction("Quit Beamer").triggered.connect(self.quit)
         self.tray.setContextMenu(menu)
@@ -1187,6 +1343,56 @@ class WindowsApplication(QWidget):
         # context menu Qt already gives QSystemTrayIcon for free.
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
+
+    def reload_config(self) -> None:
+        """Re-reads config.json, for the times it was edited outside the window, and shows it."""
+        try:
+            config = load_config(self.config_path)
+        except (ConfigError, OSError) as exc:
+            LOGGER.warning("Configuration not reloaded: %s", exc)
+            self._on_alert("Beamer", f"Could not reload the configuration: {exc}")
+            return
+        self._host = config.host
+        self._apply_config(config)
+        self._configure_trigger(config)
+        self._reflect_config(config)
+        LOGGER.info("Configuration reloaded from %s", self.config_path)
+
+    def _reflect_config(self, config: Config) -> None:
+        """Every control on every page set from `config`, without any of them saving back."""
+        for box in (*self.way_boxes.values(), self.dragging_switch, self.glow_toggle,
+                    self.resistance_slider, self.double_tap_slider):
+            box.blockSignals(True)
+        try:
+            for value, box in self.way_boxes.items():
+                box.setChecked(value in config.crossing_methods)
+            self.dragging_switch.setChecked(config.block_while_dragging)
+            self.glow_toggle.setChecked(config.edge_glow)
+            self.resistance_slider.setValue(config.crossing_resistance_px)
+            self.double_tap_slider.setValue(config.double_tap_ms)
+        finally:
+            for box in (*self.way_boxes.values(), self.dragging_switch, self.glow_toggle,
+                        self.resistance_slider, self.double_tap_slider):
+                box.blockSignals(False)
+        self.resistance_readout.setText(f"{config.crossing_resistance_px} px")
+        self._update_resistance_hint(config.crossing_resistance_px)
+        self.double_tap_readout.setText(f"{config.double_tap_ms} ms")
+        self.double_tap_slider.setEnabled(config.trigger_style != "hold")
+        self.corner_choice.set_value(config.crossing_corner)
+        self.corner_choice.set_enabled("corner" in config.crossing_methods)
+        self.edge_choice.set_value(config.mac_return_edge or "right")
+        self.trigger_recorder.set_title(TRIGGER_KEYS.get(config.trigger_key, config.trigger_key))
+        self.trigger_style_choice.set_value(config.trigger_style)
+        self._update_style_hint(config.trigger_style)
+        self.modifier_choice.set_value(config.modifier_style)
+        self.modifier_note.setText(MODIFIER_NOTES[config.modifier_style])
+        self.glow_style_choice.set_value(config.glow_style)
+        self.glow_colour_choice.set_value(config.glow_colour)
+        self._reflect_look()
+        self._show_ignored(list(config.ignored_inputs))
+        self.host_entry.setText(config.host)
+        self.port_entry.setText(str(config.port))
+        self.token_entry.setText(config.auth_token)
 
     def _on_tray_activated(self, reason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -1255,6 +1461,10 @@ class WindowsApplication(QWidget):
             LOGGER.info("Ignoring %s as the Mac's address: that is this PC", host)
             host = None
         changed = False
+        if host and host != self._config.mac_host and self._config.mac_hardware_address:
+            # A different Mac: the old one's hardware address would wake the wrong machine.
+            self._config.mac_hardware_address = ""
+            changed = True
         for name, value in (("mac_host", host), ("mac_return_edge", edge or ""), ("mac_resistance_px", resistance)):
             if value in (None, "") or getattr(self._config, name) == value:
                 continue
@@ -1313,6 +1523,7 @@ class WindowsApplication(QWidget):
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
         self.ignored_recorder.cancel()
+        self.trigger_recorder.cancel()
         self._run_previews()
 
     def changeEvent(self, event) -> None:
@@ -1408,6 +1619,26 @@ class WindowsApplication(QWidget):
         location = "On your Mac" if self.sender.redirecting else "On this PC"
         if location != self.location_readout.text():
             self.location_readout.setText(location)
+        trip = self.sender.round_trip_ms
+        trip_text = f"{trip} ms" if trip is not None else ""
+        if trip_text != self.round_trip_readout.text():
+            self.round_trip_readout.setText(trip_text)
+            self.round_trip_row.setVisible(trip is not None)
+        redirect_text = "Bring input back to this PC" if self.sender.redirecting else "Send input to your Mac"
+        if redirect_text != self.redirect_button.text():
+            self.redirect_button.setText(redirect_text)
+            self.redirect_action.setText(redirect_text)
+        sending = self._config is not None and self._config.send_to_mac
+        self.redirect_button.setEnabled(sending)
+        self.redirect_action.setEnabled(sending)
+        pause_text = "Resume crossing" if self.sender.crossing_paused else "Pause crossing"
+        if pause_text != self.pause_button.text():
+            self.pause_button.setText(pause_text)
+            self.pause_action.setText(pause_text)
+            widgets.set_role(self.pause_button, "primary" if self.sender.crossing_paused else "")
+        sentence = self._crossing_state_sentence()
+        if sentence != self.crossing_state.text():
+            self.crossing_state.setText(sentence)
         # "On your Mac" above already says this while redirecting; the hint is for the rest --
         # not connected, or the hooks failing to install -- and stays quiet in the boring case.
         send_hint = "" if self.sender.redirecting or self._sending_detail in (

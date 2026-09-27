@@ -46,7 +46,7 @@ machine's settings.
 
 | Mac | Windows |
 |---|---|
-| <img src="assets/mac-overview.png" width="400" alt="Beamer's Overview page on the Mac: where input is, whether the link is up, and the two everyday controls"> | <img src="assets/windows-overview.png" width="400" alt="Beamer's Overview page on Windows: where input is, and a switch for each direction"> |
+| <img src="assets/mac-overview.png" width="400" alt="Beamer's Overview page on the Mac: where input is, whether the link is up, and the two everyday controls"> | <img src="assets/windows-overview.png" width="400" alt="Beamer's Overview page on Windows: where input is, Send input and Pause crossing, and a switch for each direction"> |
 | <img src="assets/mac-design.png" width="400" alt="Beamer's Design page on the Mac: the notch and edge styles with live previews, and the colour schemes"> | <img src="assets/windows-design.png" width="400" alt="Beamer's Design page on Windows: the glow switch, Glow and Beam with live previews, and the colour schemes"> |
 
 ## What it does
@@ -55,13 +55,15 @@ machine's settings.
   through the MacBook's notch. The pointer arrives at the same point along the border. The edge
   lights up as you push, and the trackpad ticks at every quarter of the way through.
 - **Or press a key.** Double-tap or hold a trigger key to switch without moving the pointer. Right
-  Option on the Mac and Right Ctrl on the PC to start with; on the Mac it can be any key you like.
+  Option on the Mac and Right Ctrl on the PC to start with; on either machine it can be any key
+  that types nothing, recorded by pressing it.
 - **Either way round.** The Mac drives the PC and the PC drives the Mac. Each machine has a switch
   per direction, so you can turn one way off and keep the other.
 - **The clipboard comes with you.** Text and images, both ways, at the moment you switch. Files
   stay where they are.
 - **Your shortcuts still work.** Cmd becomes Ctrl and Option becomes Alt on Windows, so Cmd+C
-  copies there too. The PC gets the reverse: its Ctrl+C arrives on the Mac as Cmd+C.
+  copies there too. The PC gets the reverse: its Ctrl+C arrives on the Mac as Cmd+C. Either
+  machine can switch to Positional instead, where each key arrives as the key in its place.
 - **Media keys follow you.** Play, pause, skip, mute and volume act on whichever machine you are
   driving. Brightness stays with the Mac.
 - **Keys and buttons that stay put.** Each machine keeps a list of keys and mouse buttons that keep
@@ -73,7 +75,9 @@ machine's settings.
 - **Make it yours.** The edge as a glow or a beam, five colour schemes, the notch as a beam or an
   island with a meter, and how hard you push before it crosses.
 - **Out of the way when it should be.** A full-screen app holds the edges, so a game or a film never
-  loses the pointer; the trigger key still works. Switch to a PC that is asleep and Beamer wakes it.
+  loses the pointer; the trigger key still works. Pause crossing does the same by hand. A drag
+  that reaches the edge stays a drag. Switch to a machine that is asleep and Beamer wakes it, where
+  that machine answers wake-on-LAN: a PC usually does, a MacBook on Wi-Fi usually does not.
 - **Your network, nobody else's.** No server in the middle. The two machines talk to each other
   directly, encrypted, and you pair them once with a six-digit code. More in [SECURITY.md](SECURITY.md).
 - **Free and open source.** No account, no subscription, GPL-3.0.
@@ -86,10 +90,10 @@ About Beamer.
 
 | Page | Mac | Windows |
 |---|---|---|
-| Overview | Where input is, the link, the everyday controls, start at login | Where input is, a switch per direction, start at sign-in |
-| Crossing | Ways in (edge, corner, notch, shortcut), which edge, resistance | Ways in (edge, corner, shortcut), the arrangement with the Mac, resistance |
+| Overview | Where input is, the link and its round trip, Send input and Pause crossing, a switch per direction, start at login | Where input is, the link and its round trip, Send input and Pause crossing, a switch per direction, start at sign-in |
+| Crossing | Ways in (edge, corner, notch, shortcut), which edge, never while dragging, resistance | Ways in (edge, corner, shortcut), the arrangement with the Mac, never while dragging, resistance |
 | Design | Notch style, edge glow or beam, colour scheme, haptics, with live previews | Glow on or off, Glow or Beam, colour scheme, with live previews |
-| Keyboard | Trigger key (recorded), double-tap or hold, modifier style, what stays on this Mac | Trigger key, double-tap or hold, what stays on this PC |
+| Keyboard | Trigger key (recorded), double-tap or hold, what stays on this Mac, modifier style | Trigger key (recorded), double-tap or hold, what stays on this PC, modifier style |
 | Pairing | Choose a PC and type its code | Pair a Mac shows the code |
 | Connection | The PC's address, port and token | This PC's address, port and token |
 | Permissions / Firewall | Accessibility and Input Monitoring | Whether Windows Firewall lets the Mac in, with a one-button fix |

@@ -8,7 +8,7 @@ from __future__ import annotations
 # (key, name, what the page is for), in sidebar order; Ctrl+1 is the first.
 PAGES = (
     ("overview", "Overview",
-     "Where input is right now, and the two switches you reach for every day."),
+     "Where input is right now, and the controls you reach for every day."),
     ("crossing", "Crossing",
      "How input leaves this PC: the ways in, the arrangement with your Mac, and how hard the edge "
      "pushes back first."),
@@ -16,7 +16,8 @@ PAGES = (
      "How crossing looks on this PC: the light along the edge that leads to your Mac. Every "
      "change applies as you make it."),
     ("keyboard", "Keyboard",
-     "The key that sends input to your Mac, and the keys and buttons that stay on this PC."),
+     "The key that sends input to your Mac, the keys and buttons that stay on this PC, and how its "
+     "Ctrl and Windows keys arrive on the Mac."),
     ("pairing", "Pairing",
      "Connect a Mac to this PC by typing the code it shows here. Once per Mac."),
     ("connection", "Connection",

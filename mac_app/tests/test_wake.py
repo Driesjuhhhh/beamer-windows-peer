@@ -102,6 +102,15 @@ class WakingControllerTests(unittest.TestCase):
             if thread.name == "wake":
                 thread.join(timeout=5)
 
+    def test_a_pc_that_refused_the_token_is_not_woken(self):
+        from bridge import AUTH_FAILED_STATUS
+
+        self.controller.connection_status = AUTH_FAILED_STATUS
+        self.assertFalse(self.controller.set_redirecting(True))
+        self._wait_for_wake_thread()
+        self.assertEqual(self.sent, [])
+        self.assertFalse(self.controller.waking)
+
     def test_switch_while_unreachable_sends_the_packet_and_shows_waking(self):
         # The wake thread must see the packet as sent before the window is checked.
         self.controller.stop_event.set()

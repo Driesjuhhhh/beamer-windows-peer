@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import capture_win
 import ignored
 import protocol
 
@@ -17,30 +18,21 @@ EDGES = ("left", "right", "top", "bottom")
 CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
 METHODS = ("edge", "corner", "shortcut")
 TRIGGER_STYLES = ("double_tap", "hold")
-# Wire names, which are Mac-shaped: "cmd_r" is the right Ctrl key on this
-# keyboard. Named here so the window can label them in Windows' own words
-# without a second table to keep in step.
-TRIGGER_KEYS = {
-    "cmd_r": "Right Ctrl",
-    "cmd": "Left Ctrl",
-    "alt_r": "Right Alt",
-    "alt": "Left Alt",
-    "ctrl_r": "Right Windows",
-    "ctrl": "Left Windows",
-    "shift_r": "Right Shift",
-    "menu": "Menu",
-}
-# The virtual key each trigger arrives as, so the ignored list can refuse the trigger.
+# Any named key that is not a character can be the trigger, recorded by pressing it, as on the
+# Mac: a modifier, a function key, a navigation key. Stored as its wire name, which is Mac-shaped --
+# "cmd_r" is the right Ctrl key on this keyboard -- so every trigger saved before the recorder
+# (eight fixed keys, 1.2 to 1.3.1) is still one. Media and browser keys are left out: they are
+# what the stays-on-this-PC list is for. The undifferentiated 0x10-0x12 never reach the hook.
+_NOT_TRIGGERS = {0x10, 0x11, 0x12} | set(range(0xA6, 0xB4))
 TRIGGER_VKS = {
-    "cmd_r": 0xA3,
-    "cmd": 0xA2,
-    "alt_r": 0xA5,
-    "alt": 0xA4,
-    "ctrl_r": 0x5C,
-    "ctrl": 0x5B,
-    "shift_r": 0xA1,
-    "menu": 0x5D,
+    name: vk for vk, name in capture_win.VK_TO_NAME.items() if vk not in _NOT_TRIGGERS
 }
+TRIGGER_KEYS = {name: capture_win.VK_TITLES[vk] for name, vk in TRIGGER_VKS.items()}
+# Loaded if a config names them, never offered by the recorder, as on the Mac: Backspace, Tab,
+# Enter, Esc and Space are typing keys a double-tap or a hold would take from every app, and
+# Windows gives a window no key-down for Print Screen, so it cannot be recorded at all.
+UNRECORDABLE_TRIGGER_VKS = {0x08, 0x09, 0x0D, 0x1B, 0x20, 0x2C}
+MODIFIER_STYLES = ("semantic", "positional")
 
 
 class ConfigError(Exception):
@@ -72,6 +64,11 @@ class Config:
     trigger_key: str = "cmd_r"
     trigger_style: str = "double_tap"
     double_tap_ms: int = 300
+    # How this PC's Ctrl and Windows keys arrive on the Mac, the Mac's own two styles: Semantic
+    # makes Ctrl+C Cmd+C there, Positional keeps each key where it sits.
+    modifier_style: str = "semantic"
+    # A push against the edge with a button held is a drag, not a crossing, as on the Mac.
+    block_while_dragging: bool = True
     # The Mac's address is learned, never typed: it is the peer address the
     # Mac's own link arrives from.
     mac_host: str = ""
@@ -86,6 +83,9 @@ class Config:
     # own number, above: one slider for each direction, because the hand does
     # not feel a trackpad and a mouse the same way.
     mac_resistance_px: int = 120
+    # The Mac's hardware address, read from this PC's ARP table whenever the link comes up, so a
+    # switch that finds the Mac asleep can send it a wake-on-LAN packet. Never typed.
+    mac_hardware_address: str = ""
     # Keys and buttons that stay on this PC while its input is on the Mac; see ignored.py.
     ignored_inputs: list = field(default_factory=list)
 
@@ -159,8 +159,14 @@ def validate_config(config: Config) -> None:
         double_tap_ms = int(config.double_tap_ms)
     except (TypeError, ValueError) as exc:
         raise ConfigError("double_tap_ms must be greater than zero") from exc
-    if isinstance(config.double_tap_ms, bool) or double_tap_ms <= 0:
-        raise ConfigError("double_tap_ms must be greater than zero")
+    if isinstance(config.double_tap_ms, bool) or not 50 <= double_tap_ms <= 2000:
+        raise ConfigError("double_tap_ms must be between 50 and 2000")
+    if config.modifier_style not in MODIFIER_STYLES:
+        raise ConfigError(f"modifier_style must be one of: {', '.join(MODIFIER_STYLES)}")
+    if not isinstance(config.block_while_dragging, bool):
+        raise ConfigError("block_while_dragging must be true or false")
+    if not isinstance(config.mac_hardware_address, str):
+        raise ConfigError("mac_hardware_address must be text")
     if not isinstance(config.crossing_methods, list) or any(
         method not in METHODS for method in config.crossing_methods
     ):
@@ -172,9 +178,9 @@ def validate_config(config: Config) -> None:
         try:
             resistance = int(value)
         except (TypeError, ValueError) as exc:
-            raise ConfigError(f"{name} must be a whole number of pixels, zero or more") from exc
-        if isinstance(value, bool) or resistance < 0:
-            raise ConfigError(f"{name} must be a whole number of pixels, zero or more")
+            raise ConfigError(f"{name} must be a whole number of pixels from 0 to 500") from exc
+        if isinstance(value, bool) or not 0 <= resistance <= 500:
+            raise ConfigError(f"{name} must be a whole number of pixels from 0 to 500")
     if not isinstance(config.allow_mac_to_drive, bool):
         raise ConfigError("allow_mac_to_drive must be true or false")
     try:
@@ -228,6 +234,9 @@ def config_from_dict(raw: dict) -> Config:
             trigger_key=trigger_key,
             trigger_style=raw.get("trigger_style", "double_tap"),
             double_tap_ms=int(raw.get("double_tap_ms", 300)),
+            modifier_style=raw.get("modifier_style", "semantic"),
+            block_while_dragging=raw.get("block_while_dragging", True),
+            mac_hardware_address=raw.get("mac_hardware_address", "") or "",
             mac_host=raw.get("mac_host", "") or "",
             mac_return_edge=raw.get("mac_return_edge", "") or "",
             arrangement_set_at=int(raw.get("arrangement_set_at", 0)),
@@ -280,6 +289,9 @@ def config_to_dict(config: Config) -> dict:
         "trigger_key": config.trigger_key,
         "trigger_style": config.trigger_style,
         "double_tap_ms": int(config.double_tap_ms),
+        "modifier_style": config.modifier_style,
+        "block_while_dragging": config.block_while_dragging,
+        "mac_hardware_address": config.mac_hardware_address,
         "mac_host": config.mac_host,
         "mac_return_edge": config.mac_return_edge,
         "arrangement_set_at": int(config.arrangement_set_at),
