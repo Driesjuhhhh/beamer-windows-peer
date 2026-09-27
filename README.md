@@ -12,7 +12,7 @@ Installers for each release are on the [releases page](https://github.com/kalkma
 
 The Mac app is signed and notarised by Apple. The Windows installer is not code-signed — a certificate costs money and Beamer is free — so Windows shows "Windows protected your PC" the first time: choose More info, then Run anyway. Installing through winget does not show that warning. Everything the installer contains is built from this repository, and the sections below say how to build it yourself.
 
-Beamer is MIT licensed; see `LICENSE`.
+Beamer is licensed under the GNU General Public License v3.0; see `LICENSE`. Releases up to and including 1.2.0 were MIT.
 
 ## Install on macOS
 
