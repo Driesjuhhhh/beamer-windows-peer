@@ -23,7 +23,8 @@ import threading
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
-from key_codes import KEY_NAME_TO_CODE, PRINTABLE_KEY_FALLBACKS
+import keyboard_layout
+from key_codes import KEY_NAME_TO_CODE
 
 try:
     import Quartz
@@ -35,14 +36,6 @@ LOGGER = logging.getLogger("Beamer")
 # Stamped into every injected event's kCGEventSourceUserData. Any non-zero
 # value would do; this one is recognisable in a log.
 INJECTED_MARK = 0xBEA3
-
-# A US-layout character to the key that produces it, so a chord like Cmd+C
-# lands on the right key rather than arriving as text with no key code. The
-# table is the inverse of the one bridge.py reads keys with, so the two
-# directions cannot disagree about which key is which.
-CHAR_TO_KEY_CODE: Dict[str, int] = {}
-for _code, _char in PRINTABLE_KEY_FALLBACKS.items():
-    CHAR_TO_KEY_CODE.setdefault(_char, _code)
 
 MODIFIER_FLAG_NAMES = {
     "cmd": "kCGEventFlagMaskCommand",
@@ -72,6 +65,7 @@ DOUBLE_CLICK_SLOP_PX = 5
 LINES_PER_NOTCH = 1.0
 
 _mods_down: Set[str] = set()
+_held_codes: Dict[str, int] = {}
 _buttons_down: Set[str] = set()
 _last_click: Dict[str, Tuple[float, int, int, int]] = {}
 _warned_names: Set[str] = set()
@@ -106,10 +100,12 @@ def current_flags(mods_down: Set[str]) -> int:
     return flags
 
 
-def plan_key_event(name: str, down: bool, mods_down: Set[str]) -> Optional[Tuple[int, Optional[str]]]:
+def plan_key_event(name: str, down: bool, mods_down: Set[str], held: Optional[Dict[str, int]] = None) -> Optional[Tuple[int, Optional[str]]]:
     """Pure planning: (key code, unicode string or None) for one key, or None
     when there is nothing to send. Mutates `mods_down` exactly as inject_key
-    does, so a test can inspect the bookkeeping."""
+    does, so a test can inspect the bookkeeping. `held` keeps the key each
+    character went down on, so its release lets go of that key even if the
+    layout changed in between."""
     lowered = name.lower()
     if lowered in MODIFIER_FLAG_NAMES:
         # Recorded before the event is built, so the modifier's own event
@@ -127,8 +123,16 @@ def plan_key_event(name: str, down: bool, mods_down: Set[str]) -> Optional[Tuple
             LOGGER.warning("Unknown key name ignored: %r", name)
             _warned_names.add(name)
         return None
-    key_code = CHAR_TO_KEY_CODE.get(name.lower())
+    # The key that types it on this Mac's own layout, so a chord like Cmd+C lands on the right
+    # key, and a plain "z" from the PC is not posted as the US Z key, which types "y" on a
+    # German Mac. keyboard_layout is also what bridge.py reads keys with, so the two directions
+    # agree about which key is which.
+    if held is not None and not down and name in held:
+        return held.pop(name), None
+    key_code = keyboard_layout.code_for(name.lower())
     if key_code is not None and (name.islower() or not name.isalpha() or mods_down):
+        if held is not None and down:
+            held[name] = key_code
         return key_code, None
     # A character this layout table cannot place -- an accent, an em dash, a
     # capital with no shift held. Typed as text: it lands correctly in a text
@@ -139,7 +143,7 @@ def plan_key_event(name: str, down: bool, mods_down: Set[str]) -> Optional[Tuple
 @_locked
 def inject_key(name: str, down: bool) -> None:
     quartz = _require()
-    plan = plan_key_event(name, down, _mods_down)
+    plan = plan_key_event(name, down, _mods_down, _held_codes)
     if plan is None:
         return
     key_code, text = plan
@@ -310,7 +314,7 @@ def release_all() -> None:
     """Let go of every key and button this module is holding. Called when the
     link drops mid-chord, so a Command key held at the moment the PC went
     away does not stay down on the Mac."""
-    for name in sorted(_mods_down):
+    for name in sorted(_mods_down) + sorted(_held_codes):
         try:
             inject_key(name, down=False)
         except Exception:
@@ -321,4 +325,5 @@ def release_all() -> None:
         except Exception:
             LOGGER.exception("Could not release the %s mouse button", button)
     _mods_down.clear()
+    _held_codes.clear()
     _buttons_down.clear()

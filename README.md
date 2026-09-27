@@ -27,9 +27,9 @@ Free, with no account. Every installer is on the [releases page](https://github.
 ## Quick start
 
 1. **Install on both machines.** On the Mac, drag Beamer to Applications, open it, and press the
-   two Grant buttons on the Permissions page (Accessibility, then Input Monitoring). Then quit
-   Beamer from its menu bar icon and open it again: macOS only passes keys to an app started after
-   the grant, so until then the pointer crosses but the keyboard does not. On Windows,
+   two Grant buttons on the Permissions page (Accessibility, then Input Monitoring), then Relaunch
+   Beamer on the same page: macOS only passes keys to an app started after the grant, so until then
+   the pointer crosses but the keyboard does not. On Windows,
    run the installer. It is not code-signed, because a certificate costs money and Beamer is free,
    so Windows says "Windows protected your PC" the first time: choose More info, then Run anyway.
    winget does not show that warning. Beamer on Windows runs as administrator, so expect one UAC
@@ -112,9 +112,8 @@ step, so the border is always the same one seen from both ends.
   keyboard there.
 - **Files do not cross**, only text and images, up to 256KB of text and an 8MB image.
 - **AltGr is out of reach from the Mac.**
-- **Layouts that move letters, such as AZERTY and QWERTZ, are not handled yet.** Shortcuts sent
-  from the Mac, and letters typed from the PC onto the Mac, follow US key positions, and a dead key
-  typed on the PC does not cross. US and UK layouts are unaffected.
+- **A dead key typed on the PC does not cross**, so an accent typed as two keys on the PC's
+  layout arrives on the Mac without it. Shortcuts and letters follow each machine's own layout.
 - **Intel Macs are not supported yet.** The Mac app is built for Apple silicon only.
 - **The Windows installer is unsigned.** SmartScreen warns until it has a download history; winget
   avoids it.
@@ -207,12 +206,12 @@ Mac's Keyboard page can switch this to positional, where Cmd sends the Windows k
 So Cmd+C, Cmd+V, Cmd+Z and Cmd+T are copy, paste, undo and new tab, Ctrl+E opens Explorer and Ctrl
 on its own opens Start. The PC's keys arrive on the Mac the reverse way. Chords with Ctrl, Alt or
 Windows held are sent as real virtual-key presses, so they land on the right key for the active
-Windows keyboard layout. The `key_map` object in each app's config JSON can still override single
-keys.
+Windows keyboard layout. The Mac reads its own layout too, so on a German or French Mac Cmd+Z is
+still undo and Cmd+A still selects all, and a letter typed from the PC lands on the key that types
+it. The `key_map` object in each app's config JSON can still override single keys.
 
-The trigger key is never forwarded. On the Mac it is recorded by pressing it, Right Option to start
-with; on the PC it is one of eight modifier and Menu keys, Right Ctrl to start with. Either can
-double-tap or hold.
+The trigger key is never forwarded. On both machines it is recorded by pressing it: Right Option on
+the Mac and Right Ctrl on the PC to start with. Either can double-tap or hold.
 
 The stays-here list is per machine, because a Mac keycode and a Windows virtual key are different
 numbers for the same key. It takes keys, the right, middle, back and forward mouse buttons, and on

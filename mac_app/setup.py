@@ -26,6 +26,7 @@ setup(
         "ignored",
         "input_injector_mac",
         "key_codes",
+        "keyboard_layout",
         "link_state",
         "media_keys",
         "notch_beam",

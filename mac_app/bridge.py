@@ -19,12 +19,12 @@ import desktop_mac
 from input_injector_mac import INJECTED_MARK
 import gestures
 import ignored
+import keyboard_layout
 import media_keys
 import protocol
 from key_codes import (
     KEY_NAME_TO_CODE,
     MODIFIER_KEY_CODES,
-    PRINTABLE_KEY_FALLBACKS,
     SPECIAL_KEY_NAMES,
 )
 
@@ -211,9 +211,13 @@ class QuartzEventTranslator:
         if special_messages:
             return KeyResult(False, is_down, is_repeat, special_messages)
         if is_down:
-            character = self._unicode_character(event, keycode)
-            if character is not None and not is_repeat:
-                self.printable_down[keycode] = character
+            # A repeat sends what the first press sent, so switching layout mid-hold cannot start
+            # a second key on Windows that the release, which sends the saved one, never lets go.
+            character = self.printable_down.get(keycode) if is_repeat else None
+            if character is None:
+                character = self._unicode_character(event, keycode)
+                if character is not None and not is_repeat:
+                    self.printable_down[keycode] = character
         else:
             character = self.printable_down.pop(keycode, None)
             if character is None:
@@ -356,11 +360,12 @@ class QuartzEventTranslator:
         # chord never exists on the other side. Ctrl behaves the same way with
         # control characters, and only survives today because those are not
         # printable and already fall through. So while one of those is down,
-        # the key's own unshifted character is what Windows needs. Shift and
+        # the key's own unshifted character is what Windows needs, read from
+        # this Mac's layout so a German Cmd+Z is Ctrl+Z, not Ctrl+Y. Shift and
         # caps lock are deliberately not in that set -- they are meant to
         # change the character, and the receiver reconciles them.
         if self.modifier_down & CHORD_MODIFIER_KEY_CODES:
-            base = PRINTABLE_KEY_FALLBACKS.get(keycode)
+            base = keyboard_layout.char_for(keycode)
             if base is not None:
                 return base
         length, characters = self.quartz.CGEventKeyboardGetUnicodeString(
@@ -368,7 +373,7 @@ class QuartzEventTranslator:
         )
         if length and isinstance(characters, str) and len(characters) == 1 and characters.isprintable():
             return characters
-        return PRINTABLE_KEY_FALLBACKS.get(keycode)
+        return keyboard_layout.char_for(keycode)
 
 
 class _GestureEventView:

@@ -5,7 +5,8 @@ out of the AppKit recorder in widgets.py so both are testable without it.
 import ignored
 import media_keys
 from bridge import NX_DEVICE_MODIFIER_BITS, WIRE_OTHER_BUTTONS
-from key_codes import PRINTABLE_KEY_FALLBACKS, SPECIAL_KEY_NAMES, key_title
+import keyboard_layout
+from key_codes import SPECIAL_KEY_NAMES, key_title
 
 BUTTON_TITLES = {
     "right": "Right button",
@@ -32,7 +33,7 @@ def entry_title(entry):
         name = SPECIAL_KEY_NAMES.get(code)
         if name is not None:
             return key_title(name)
-        fallback = PRINTABLE_KEY_FALLBACKS.get(code)
+        fallback = keyboard_layout.char_for(code)
         return fallback.upper() if fallback is not None else f"Key {code}"
     if kind == "button":
         return BUTTON_TITLES.get(value, f"Button {value}")

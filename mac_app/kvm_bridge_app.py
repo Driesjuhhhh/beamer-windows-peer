@@ -5,6 +5,7 @@ import logging
 import logging.handlers
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -24,6 +25,7 @@ import config as config_module
 import crossing
 import gestures
 import ignored_titles
+import keyboard_layout
 import notch_beam
 import previews
 from notch_beam import NotchBeam
@@ -762,6 +764,9 @@ class ControlWindow(AppKit.NSObject):
         # Set by TrayApp: saves one direction's switch, as its menu ticks do.
         self.direction_handler = None
         self.last_capture_attempt = 0.0
+        # macOS passes keys only to a process started after Input Monitoring is granted, so a grant
+        # made during this run needs a relaunch before the keyboard crosses, however ready the tap looks.
+        self.granted_at_launch = accessibility_granted() and input_monitoring_granted()
         # Set by TrayApp: the beacon listener whose PCs the Pair module lists.
         self.discovery = None
         self._pcs = []
@@ -1663,7 +1668,12 @@ class ControlWindow(AppKit.NSObject):
         module.add(widgets.hairline())
         self.input_status, self.input_button = self._permission_row(module, "Input Monitoring", "requestInputMonitoring:")
         self.capture_status = widgets.note()
-        module.add(self.capture_status.view)
+        line = widgets.stack(vertical=False, spacing=12)
+        line.addArrangedSubview_(widgets.hug(self.capture_status.view, AppKit.NSLayoutPriorityDefaultLow))
+        self.relaunch_button = widgets.Button("Relaunch Beamer", self, "relaunch:", style="primary", scale="small")
+        self.relaunch_button.view.setHidden_(True)
+        line.addArrangedSubview_(self.relaunch_button.view)
+        module.add(line)
         return module
 
     @objc.python_method
@@ -1850,6 +1860,19 @@ class ControlWindow(AppKit.NSObject):
         Quartz.CGRequestListenEventAccess()
         self.refresh()
 
+    def relaunch_(self, _sender):
+        """Opens this app again once this process has gone, which the single-instance lock needs,
+        then quits. Run from source there is no bundle to reopen, so it only says what to do."""
+        bundle = AppKit.NSBundle.mainBundle().bundlePath()
+        if not bundle.endswith(".app"):
+            self.capture_status.set("Quit Beamer and start it again.", ink="amber")
+            return
+        subprocess.Popen(
+            ["/bin/sh", "-c", 'while kill -0 "$0" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open "$1"', str(os.getpid()), bundle],
+            start_new_session=True,
+        )
+        self.quit_handler()
+
     def toggleRedirect_(self, _sender):
         if not self.controller.input_ready:
             self._say("Grant both Mac permissions first.", "fault")
@@ -1935,7 +1958,9 @@ class ControlWindow(AppKit.NSObject):
             self.pc_empty.set(f"Beamer cannot look for PCs: {discovery.error}", ink="fault")
         else:
             self.pc_empty.set(
-                "Looking for PCs running Beamer on this network. Open Beamer on the PC and it appears here.", ink="ink_2"
+                "Looking for PCs running Beamer. Open it on the PC and it appears here; across a VPN or "
+                "on guest Wi-Fi it cannot, so enter its address and a shared token on Connection instead.",
+                ink="ink_2",
             )
         self.pc_frame.setHidden_(not pcs)
         self.pc_empty.view.setHidden_(bool(pcs))
@@ -2066,7 +2091,11 @@ class ControlWindow(AppKit.NSObject):
             if now - self.last_capture_attempt >= CAPTURE_RETRY_INTERVAL_SECONDS:
                 self.last_capture_attempt = now
                 controller.start_input_capture()
-        if controller.input_ready:
+        needs_relaunch = access and listening and not self.granted_at_launch
+        self.relaunch_button.view.setHidden_(not needs_relaunch)
+        if needs_relaunch:
+            self.capture_status.set("Both granted. Relaunch Beamer so macOS passes it the keyboard.", ink="amber")
+        elif controller.input_ready:
             self.capture_status.set("Input capture ready.", ink="signal")
         elif access and listening:
             detail = controller.input_error
@@ -2190,6 +2219,8 @@ class TrayApp(rumps.App):
         self.controller = controller
         self.settings_store = settings_store
         self.logger = logger
+        # Before anything reads or posts a key: the table follows this Mac's layout from here on.
+        self.layout_observer = keyboard_layout.watch()
         self.control_window = ControlWindow.alloc().initWithController_settingsStore_logger_(
             controller, settings_store, logger
         )
