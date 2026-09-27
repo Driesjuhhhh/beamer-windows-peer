@@ -79,6 +79,8 @@ WM_RBUTTONUP = 0x0205
 WM_MBUTTONDOWN = 0x0207
 WM_MBUTTONUP = 0x0208
 WM_MOUSEWHEEL = 0x020A
+WM_XBUTTONDOWN = 0x020B
+WM_XBUTTONUP = 0x020C
 WM_MOUSEHWHEEL = 0x020E
 
 LLKHF_INJECTED = 0x10
@@ -97,6 +99,77 @@ BUTTON_MESSAGES = {
     WM_MBUTTONDOWN: ("middle", True),
     WM_MBUTTONUP: ("middle", False),
 }
+
+# The side buttons share one pair of messages; the high word of mouseData says which.
+X_BUTTONS = {1: "back", 2: "forward"}
+
+
+def button_of(message: int, mouse_data: int) -> Optional[Tuple[str, bool]]:
+    """(name, down) for a button message, or None for a move or the wheel."""
+    fixed = BUTTON_MESSAGES.get(message)
+    if fixed is not None:
+        return fixed
+    if message in (WM_XBUTTONDOWN, WM_XBUTTONUP):
+        name = X_BUTTONS.get((mouse_data >> 16) & 0xFFFF)
+        if name is not None:
+            return name, message == WM_XBUTTONDOWN
+    return None
+
+
+# What the Keyboard page calls a recorded key, in Windows' own words.
+VK_TITLES: Dict[int, str] = {
+    0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x13: "Pause", 0x14: "Caps Lock", 0x1B: "Esc",
+    0x20: "Space", 0x21: "Page Up", 0x22: "Page Down", 0x23: "End", 0x24: "Home", 0x25: "Left",
+    0x26: "Up", 0x27: "Right", 0x28: "Down", 0x2C: "Print Screen", 0x2D: "Insert", 0x2E: "Delete",
+    0x5B: "Left Windows", 0x5C: "Right Windows", 0x5D: "Menu", 0x6A: "Num *", 0x6B: "Num +",
+    0x6D: "Num -", 0x6E: "Num .", 0x6F: "Num /", 0x90: "Num Lock", 0x91: "Scroll Lock",
+    0xA0: "Left Shift", 0xA1: "Right Shift", 0xA2: "Left Ctrl", 0xA3: "Right Ctrl",
+    0xA4: "Left Alt", 0xA5: "Right Alt", 0xA6: "Browser Back", 0xA7: "Browser Forward",
+    0xAD: "Mute", 0xAE: "Volume Down", 0xAF: "Volume Up", 0xB0: "Next Track",
+    0xB1: "Previous Track", 0xB2: "Stop", 0xB3: "Play/Pause", 0xBA: ";", 0xBB: "=", 0xBC: ",",
+    0xBD: "-", 0xBE: ".", 0xBF: "/", 0xC0: "`", 0xDB: "[", 0xDC: "\\", 0xDD: "]", 0xDE: "'",
+}
+for _index in range(24):
+    VK_TITLES[0x70 + _index] = f"F{_index + 1}"
+for _index in range(10):
+    VK_TITLES[0x60 + _index] = f"Num {_index}"
+BUTTON_TITLES = {"right": "Right button", "middle": "Middle button", "back": "Back button", "forward": "Forward button"}
+
+
+def input_title(entry: str) -> str:
+    """The name an ignored-inputs entry is shown under."""
+    kind, _, value = entry.partition(":")
+    if kind == "button":
+        return BUTTON_TITLES.get(value, f"Button {value}")
+    if kind == "key" and value.isdigit():
+        vk = int(value)
+        if vk in VK_TITLES:
+            return VK_TITLES[vk]
+        if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
+            return chr(vk)
+        return f"Key {vk}"
+    return entry
+
+
+VK_SHIFT_LEFT, VK_SHIFT_RIGHT = 0xA0, 0xA1
+VK_CONTROL_LEFT, VK_CONTROL_RIGHT = 0xA2, 0xA3
+VK_MENU_LEFT, VK_MENU_RIGHT = 0xA4, 0xA5
+_RIGHT_SHIFT_SCAN = 0x36
+_EXTENDED_SCAN = 0x100
+
+
+def hook_vk(vk: int, scan: int) -> int:
+    """The virtual key the low-level hook reports for a key a window saw as `vk` and `scan`. A
+    window is told only Shift, Ctrl or Alt; the hook always knows which side. `scan` carries the
+    extended-key bit at 0x100, which is how Qt reports it, and is what marks the right Ctrl and
+    the right Alt."""
+    if vk == 0x10:
+        return VK_SHIFT_RIGHT if scan & 0xFF == _RIGHT_SHIFT_SCAN else VK_SHIFT_LEFT
+    if vk == 0x11:
+        return VK_CONTROL_RIGHT if scan & _EXTENDED_SCAN else VK_CONTROL_LEFT
+    if vk == 0x12:
+        return VK_MENU_RIGHT if scan & _EXTENDED_SCAN else VK_MENU_LEFT
+    return vk
 
 # Windows virtual keys to the wire's key names, which are Mac-shaped: the
 # semantic mapping happens here, once, so the Mac injects what it is given
@@ -290,7 +363,7 @@ class Hooks:
     """The two low-level hooks, the raw-input sink, and the thread that owns
     all three.
 
-    `on_key(name, down)` and `on_mouse(message, x, y, mouse_data)` are called
+    `on_key(name, down, vk)` and `on_mouse(message, x, y, mouse_data)` are called
     on the hook thread and return True when the event has been consumed and
     must not reach the rest of Windows. `on_motion(dx, dy)` is called with
     the mouse's own relative counts and consumes nothing -- raw input is a
@@ -422,7 +495,7 @@ class Hooks:
             name = key_name(data.vkCode, data.scanCode, self._state, _to_unicode)
             if name is None:
                 return user32.CallNextHookEx(None, code, wparam, lparam)
-            if self._on_key(name, down):
+            if self._on_key(name, down, data.vkCode):
                 return 1
         except Exception:
             # Never let an exception here swallow a key: fail open, log once

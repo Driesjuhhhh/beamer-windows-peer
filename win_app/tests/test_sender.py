@@ -54,7 +54,29 @@ class EdgeTests(unittest.TestCase):
         self.push(4)
         self.assertTrue(self.link.sender.redirecting, "a sustained push against the left edge never crossed")
 
-    def test_the_edge_is_dead_while_the_mac_is_driving(self):
+    def test_the_push_lights_the_edge_it_is_pressing(self):
+        # The app once built its sender with no pressure callback, so the PC's own push out to
+        # the Mac crossed in the dark while the same edge lit for the Mac's push home.
+        seen = []
+        self.link.sender._pressure_callback = lambda edge, pressure, crossed: seen.append((edge, crossed))
+        self.push(4)
+        self.assertTrue(seen, "a push against the edge reported no pressure")
+        self.assertTrue(all(edge == "left" for edge, _ in seen))
+        self.assertEqual(seen[-1][1], True)
+
+    def test_this_pcs_own_mouse_pushing_out_while_the_mac_drives_takes_the_pointer_across(self):
+        # 27-09-2026: the Mac's trackpad crossed to the PC, and the PC's own mouse could not push
+        # back out. The Mac's injected moves carry INJECTED_MARK and never reach on_motion, so a
+        # push here is the hand's: the Mac gets its input back and this mouse follows it across.
+        sent_home = []
+        self.link.sender.send_peer_home = lambda: sent_home.append(True) or True
+        self.link.sender.set_receiving(True)
+        self.push(4)
+        self.assertEqual(sent_home, [True])
+        self.assertTrue(self.link.sender.redirecting)
+
+    def test_a_push_while_the_mac_drives_and_cannot_be_sent_home_stays_here(self):
+        self.link.sender.send_peer_home = lambda: False
         self.link.sender.set_receiving(True)
         self.push(10)
         self.assertFalse(self.link.sender.redirecting)
@@ -256,6 +278,43 @@ class LinkTests(unittest.TestCase):
         self.sender.set_redirecting(True, arrival_edge="right", offset=0.5)
         wait_for_calls(self.clipboard.set_calls, 1)
         self.assertEqual(self.clipboard.set_calls[0][0], "copied")
+
+
+class ConnectionFailedTests(unittest.TestCase):
+    """A deliberate stop drops the socket before the reader thread's blocked
+    recv() notices, so the OSError it then raises names a socket nobody owns
+    any more -- Windows' WinError 10038 on the off switch, reproduced here
+    without a real stop()."""
+
+    def setUp(self):
+        self.statuses = []
+        self.redirected = []
+        self.sender = sender.MacSender(
+            status_callback=lambda connected, detail: self.statuses.append(detail),
+            redirect_callback=self.redirected.append,
+        )
+
+    def test_an_error_on_an_already_dropped_socket_is_not_a_failure(self):
+        old_sock, peer = socket.socketpair()
+        self.addCleanup(old_sock.close)
+        self.addCleanup(peer.close)
+        self.sender._sock = old_sock
+        self.sender.redirecting = True
+        self.sender._sock = None  # what stop()/_drop_connection() does first
+        self.sender._connection_failed("Receiving from the Mac failed: boom", expected_socket=old_sock)
+        self.assertEqual(self.statuses, [])
+        self.assertEqual(self.redirected, [])
+        self.assertTrue(self.sender.redirecting, "a stale error forced input back to this PC")
+
+    def test_an_error_on_the_live_socket_is_still_reported(self):
+        sock, peer = socket.socketpair()
+        self.addCleanup(sock.close)
+        self.addCleanup(peer.close)
+        self.sender._sock = sock
+        self.sender.redirecting = True
+        self.sender._connection_failed("Receiving from the Mac failed: boom", expected_socket=sock)
+        self.assertEqual(self.statuses, ["Receiving from the Mac failed: boom"])
+        self.assertFalse(self.sender.redirecting)
 
 
 class NoUnlock:

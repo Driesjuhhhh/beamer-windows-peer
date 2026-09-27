@@ -10,8 +10,13 @@ PAGES = (
     ("overview", "Overview",
      "Where input is right now, and the two switches you reach for every day."),
     ("crossing", "Crossing",
-     "How input leaves this PC: ways in, the arrangement with your Mac, resistance, and the "
-     "shortcut key."),
+     "How input leaves this PC: the ways in, the arrangement with your Mac, and how hard the edge "
+     "pushes back first."),
+    ("design", "Design",
+     "How crossing looks on this PC: the light along the edge that leads to your Mac. Every "
+     "change applies as you make it."),
+    ("keyboard", "Keyboard",
+     "The key that sends input to your Mac, and the keys and buttons that stay on this PC."),
     ("pairing", "Pairing",
      "Connect a Mac to this PC by typing the code it shows here. Once per Mac."),
     ("connection", "Connection",

@@ -111,3 +111,25 @@ PRINTABLE_KEY_FALLBACKS = {
     0x2F: ".",
     0x32: "`",
 }
+
+# What the settings window calls a key. Names the wire and config keep as they are. AppKit-free,
+# so widgets.py re-exports key_title rather than defining it, and anything that only needs a
+# display name can import it without pulling AppKit in.
+KEY_TITLES = {
+    "alt": "Left Option",
+    "alt_r": "Right Option",
+    "cmd": "Left Command",
+    "cmd_r": "Right Command",
+    "ctrl": "Left Control",
+    "ctrl_r": "Right Control",
+    "shift": "Left Shift",
+    "shift_r": "Right Shift",
+    "caps_lock": "Caps Lock",
+    "esc": "Escape",
+    "page_up": "Page Up",
+    "page_down": "Page Down",
+}
+
+
+def key_title(name):
+    return KEY_TITLES.get(name, name.replace("_", " ").title())

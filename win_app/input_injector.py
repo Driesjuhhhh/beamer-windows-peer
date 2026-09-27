@@ -3,8 +3,10 @@
 import ctypes
 import functools
 import logging
+import subprocess
 import sys
 import threading
+import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 
@@ -19,6 +21,8 @@ if _IS_WINDOWS:
     user32.VkKeyScanW.argtypes = [ctypes.c_wchar]
     user32.MapVirtualKeyW.restype = ctypes.c_uint
     user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    user32.GetClassNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
 
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
@@ -43,10 +47,12 @@ MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_XDOWN = 0x0080
+MOUSEEVENTF_XUP = 0x0100
+XBUTTON1 = 0x0001
+XBUTTON2 = 0x0002
 MOUSEEVENTF_WHEEL = 0x0800
 MOUSEEVENTF_HWHEEL = 0x1000
-MOUSEEVENTF_VIRTUALDESK = 0x4000
-MOUSEEVENTF_ABSOLUTE = 0x8000
 
 ULONG_PTR = ctypes.c_size_t
 
@@ -323,24 +329,115 @@ def _mouse_input(dx: int, dy: int, data: int, flags: int) -> INPUT:
 
 def inject_mouse_move(dx: int, dy: int) -> None:
     _send_input(_mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE))
+    watch_foreground()
 
 
-def inject_mouse_absolute(nx: int, ny: int) -> None:
-    """nx, ny normalised 0-65535 across the whole virtual desktop."""
-    _send_input(_mouse_input(nx, ny, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK))
+# GameInputSvc.exe runs as SYSTEM in the console session and keeps a hidden
+# window of this class, and Windows can hand that window the foreground when
+# the foreground app closes (closing a Hyper-V VM Connection window did it on
+# the rig, 25-09-2026). While it is in front, UIPI refuses every SetCursorPos
+# and silently drops every SendInput from Beamer, which is elevated but not
+# SYSTEM, so the Mac's pointer goes dead on the PC. Nothing Beamer can call
+# takes the foreground back -- SetForegroundWindow, SwitchToThisWindow and an
+# injected Alt tap were all refused -- and moving the PC's own mouse does not
+# either; a click on the PC does, and so does restarting the service, which
+# takes the window with it and leaves Windows to activate an ordinary one.
+GAMEINPUT_WINDOW_CLASS = "GameInputServiceWindow"
+GAMEINPUT_RESTART = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Restart-Service GameInputSvc -Force"]
+# A restart that did not free the pointer must not become a restart loop.
+GAMEINPUT_RESTART_COOLDOWN_SECONDS = 60.0
+
+_seen_foreground = [None]
+_gameinput_lock = threading.Lock()
+_gameinput_restarted_at = [float("-inf")]
+
+
+def _window_class(hwnd) -> str:
+    name = ctypes.create_unicode_buffer(128)
+    user32.GetClassNameW(hwnd, name, 128)
+    return name.value
+
+
+def foreground_class() -> str:
+    hwnd = user32.GetForegroundWindow()
+    return _window_class(hwnd) if hwnd else ""
+
+
+def watch_foreground() -> None:
+    """Called after every move the peer sends: one GetForegroundWindow, and a
+    class lookup only when the foreground has changed since the last move or
+    GameInput's window still holds it."""
+    hwnd = user32.GetForegroundWindow()
+    if hwnd == _seen_foreground[0]:
+        return
+    if hwnd and _window_class(hwnd) == GAMEINPUT_WINDOW_CLASS:
+        # Never marked seen, so a restart that failed or is cooling down is
+        # tried again on a later move.
+        release_gameinput_foreground()
+        return
+    _seen_foreground[0] = hwnd
+
+
+def release_gameinput_foreground(after: Optional[Callable[[], None]] = None) -> bool:
+    """If GameInput's window holds the foreground, restart GameInputSvc on a
+    thread of its own -- it takes a second or two, and the caller is the
+    session thread that must keep draining pings -- then run `after`. False
+    when GameInput is not in front, or a restart is already running or ran
+    within the cooldown."""
+    if foreground_class() != GAMEINPUT_WINDOW_CLASS:
+        return False
+    if time.monotonic() - _gameinput_restarted_at[0] < GAMEINPUT_RESTART_COOLDOWN_SECONDS:
+        return False
+    if not _gameinput_lock.acquire(blocking=False):
+        return False
+    _gameinput_restarted_at[0] = time.monotonic()
+
+    def restart() -> None:
+        try:
+            LOGGER.warning(
+                "GameInput's service window has the foreground, where Windows refuses Beamer's input; restarting GameInputSvc to free it"
+            )
+            try:
+                completed = subprocess.run(
+                    GAMEINPUT_RESTART, capture_output=True, text=True, timeout=30,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                LOGGER.exception("Could not restart GameInputSvc; a click on this PC frees the pointer")
+                return
+            if completed.returncode != 0:
+                LOGGER.error("Restarting GameInputSvc failed (%s): %s", completed.returncode, completed.stderr.strip())
+                return
+            LOGGER.info("GameInputSvc restarted; %r now has the foreground", foreground_class())
+            if after is not None:
+                after()
+        except Exception:
+            LOGGER.exception("Freeing the foreground from GameInput failed")
+        finally:
+            _gameinput_lock.release()
+
+    threading.Thread(target=restart, name="Beamer-gameinput", daemon=True).start()
+    return True
 
 
 BUTTON_DOWN_FLAGS = {
     "left": MOUSEEVENTF_LEFTDOWN,
     "right": MOUSEEVENTF_RIGHTDOWN,
     "middle": MOUSEEVENTF_MIDDLEDOWN,
+    "back": MOUSEEVENTF_XDOWN,
+    "forward": MOUSEEVENTF_XDOWN,
 }
 
 BUTTON_UP_FLAGS = {
     "left": MOUSEEVENTF_LEFTUP,
     "right": MOUSEEVENTF_RIGHTUP,
     "middle": MOUSEEVENTF_MIDDLEUP,
+    "back": MOUSEEVENTF_XUP,
+    "forward": MOUSEEVENTF_XUP,
 }
+
+# Which X button, carried in mouseData: the side buttons share one pair of flags.
+BUTTON_DATA = {"back": XBUTTON1, "forward": XBUTTON2}
 
 
 _buttons_down: Set[str] = set()
@@ -356,7 +453,7 @@ def inject_mouse_button(button: str, down: bool) -> None:
         _buttons_down.add(button)
     else:
         _buttons_down.discard(button)
-    _send_input(_mouse_input(0, 0, 0, flags))
+    _send_input(_mouse_input(0, 0, BUTTON_DATA.get(button, 0), flags))
 
 
 @_locked

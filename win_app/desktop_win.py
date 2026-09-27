@@ -1,6 +1,6 @@
 """Win32 pointer and monitor geometry, imported lazily by the receiver so the
 crossing logic stays testable without ctypes.windll. GetCursorPos, SetCursorPos
-and GetSystemMetrics share one coordinate space — virtual-desktop pixels,
+and EnumDisplayMonitors share one coordinate space — virtual-desktop pixels,
 DPI-virtualised identically for this process — so values from one feed the
 others unconverted."""
 
@@ -57,36 +57,33 @@ def cursor_position() -> Tuple[int, int]:
     return point.x, point.y
 
 
-class CURSORINFO(ctypes.Structure):
-    _fields_ = [("cbSize", ctypes.c_ulong), ("flags", ctypes.c_ulong), ("hCursor", ctypes.c_void_p), ("ptScreenPos", POINT)]
-
-
-SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
-
-
-def _cursor_flags() -> int:
-    info = CURSORINFO(cbSize=ctypes.sizeof(CURSORINFO))
-    return info.flags if user32.GetCursorInfo(ctypes.byref(info)) else -1
+_refused_under = [None]
 
 
 def set_cursor_position(x: int, y: int) -> None:
-    """SetCursorPos failed with no error code for every arrival after the rig
-    rebooted on 21-09-2026, while the Mac's relative moves drew nothing either,
-    until the physical mouse was touched. An absolute SendInput move takes the
-    path real hardware does, so it is the fallback rather than giving up."""
+    """SetCursorPos returns FALSE with no error code, and SendInput is dropped
+    in silence, whenever Windows' UIPI puts the foreground window above
+    Beamer's integrity level, so a SendInput move is no fallback. The one such
+    window seen so far is GameInput's (see input_injector); for it the
+    placement runs again once the service has been restarted, and anything
+    else in front is named in the log."""
     _require()
-    if user32.SetCursorPos(int(x), int(y)):
+    x, y = int(x), int(y)
+    if user32.SetCursorPos(x, y):
+        _refused_under[0] = None
         return
     error = ctypes.get_last_error()
     import input_injector
 
-    left, top = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
-    width, height = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
-    input_injector.inject_mouse_absolute(
-        round((x - left) * 65535 / max(width - 1, 1)),
-        round((y - top) * 65535 / max(height - 1, 1)),
-    )
-    LOGGER.warning(
-        "SetCursorPos refused (error %s, cursor flags %s); moved to %s,%s with SendInput instead",
-        error, _cursor_flags(), x, y,
-    )
+    # Placed through this function again, so a refusal after the restart is logged too.
+    if input_injector.release_gameinput_foreground(after=lambda: set_cursor_position(x, y)):
+        return
+    blocker = input_injector.foreground_class()
+    # A hold at the return edge lands here on every move, so once per blocker.
+    if blocker != _refused_under[0]:
+        _refused_under[0] = blocker
+        LOGGER.warning(
+            "SetCursorPos refused (error %s) with %r in the foreground; Windows refuses Beamer's input "
+            "while a window above its integrity level is in front, until a click on this PC",
+            error, blocker,
+        )

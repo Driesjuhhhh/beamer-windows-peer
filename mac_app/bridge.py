@@ -17,6 +17,7 @@ import clipboard_mac
 import crossing
 from input_injector_mac import INJECTED_MARK
 import gestures
+import ignored
 import media_keys
 import protocol
 from key_codes import (
@@ -131,6 +132,10 @@ NX_DEVICE_MODIFIER_BITS = {
 # excluded on purpose -- see _unicode_character.
 CHORD_MODIFIER_KEY_CODES = frozenset({0x36, 0x37, 0x3A, 0x3B, 0x3D, 0x3E})
 
+# CoreGraphics numbers the other buttons from 2; 3 and 4 are a mouse's back and forward side
+# buttons, which Windows calls XBUTTON1 and XBUTTON2.
+WIRE_OTHER_BUTTONS = {2: "middle", 3: "back", 4: "forward"}
+
 _ALL_NX_DEVICE_MODIFIER_BITS = 0
 for _bit in NX_DEVICE_MODIFIER_BITS.values():
     _ALL_NX_DEVICE_MODIFIER_BITS |= _bit
@@ -241,17 +246,11 @@ class QuartzEventTranslator:
             message_type, button = button_events[event_type]
             return [{"type": message_type, "data": {"button": button}}]
         if event_type in (quartz.kCGEventOtherMouseDown, quartz.kCGEventOtherMouseUp):
-            button_number = int(
-                quartz.CGEventGetIntegerValueField(event, quartz.kCGMouseEventButtonNumber)
-            )
-            if button_number != 2:
+            name, is_down = self.button_of(event_type, event)
+            if name not in WIRE_OTHER_BUTTONS.values():
                 return []
-            message_type = (
-                protocol.MSG_MOUSEDOWN
-                if event_type == quartz.kCGEventOtherMouseDown
-                else protocol.MSG_MOUSEUP
-            )
-            return [{"type": message_type, "data": {"button": "middle"}}]
+            message_type = protocol.MSG_MOUSEDOWN if is_down else protocol.MSG_MOUSEUP
+            return [{"type": message_type, "data": {"button": name}}]
         if event_type == quartz.kCGEventScrollWheel:
             is_continuous = bool(
                 quartz.CGEventGetIntegerValueField(event, quartz.kCGScrollWheelEventIsContinuous)
@@ -280,6 +279,24 @@ class QuartzEventTranslator:
                 return []
             return [{"type": protocol.MSG_SCROLL, "data": {"dy": dy, "dx": dx, "mode": "line"}}]
         return []
+
+    def button_of(self, event_type, event):
+        """(name, is_down) for a button event, else None. Left, right and the other buttons by
+        name where the wire has one -- middle, back, forward -- and by their 1-based number
+        where it does not, so a sixth button can still be kept on this Mac."""
+        quartz = self.quartz
+        fixed = {
+            quartz.kCGEventLeftMouseDown: ("left", True),
+            quartz.kCGEventLeftMouseUp: ("left", False),
+            quartz.kCGEventRightMouseDown: ("right", True),
+            quartz.kCGEventRightMouseUp: ("right", False),
+        }
+        if event_type in fixed:
+            return fixed[event_type]
+        if event_type not in (quartz.kCGEventOtherMouseDown, quartz.kCGEventOtherMouseUp):
+            return None
+        number = int(quartz.CGEventGetIntegerValueField(event, quartz.kCGMouseEventButtonNumber))
+        return WIRE_OTHER_BUTTONS.get(number, str(number + 1)), event_type == quartz.kCGEventOtherMouseDown
 
     def reset_mouse_accumulators(self):
         """Drop any sub-pixel remainder carried across mousemove events.
@@ -491,6 +508,11 @@ class KVMController:
         self.capture_thread = None
         self.input_error = None
         self.connection_status = "Waiting to connect"
+        # The host, port and token that last completed a handshake. Silence after the preamble
+        # from a PC that has answered this run is a PC too busy to answer (Windows stalls every
+        # app for half a minute while it reconfigures its displays), not an older Beamer. The
+        # token is part of it so a re-pair, even to another PC at the same address, starts clean.
+        self.answered = None
         # Set while Windows reports it is clearing its lock screen. Beamer
         # cannot type on the secure desktop, so Windows unlocks first and
         # drops input meanwhile; without this the switch just looks dead for
@@ -506,6 +528,7 @@ class KVMController:
         self.trigger_code = KEY_NAME_TO_CODE[cfg.trigger_key]
         self.last_trigger_down = 0.0
         self.trigger_suppressed = False
+        self.ignore_gate = ignored.Gate(cfg.ignored_inputs)
         # Crossing: the engine is pure and runs on the event-tap thread; the
         # desktop bounds come from CoreGraphics (already in the top-left
         # global space CGEventGetLocation uses, so nothing is flipped) and are
@@ -634,6 +657,7 @@ class KVMController:
         self.translator.modifier_down.clear()
         self.translator.printable_down.clear()
         self.translator.reset_mouse_accumulators()
+        self.ignore_gate.configure(cfg.ignored_inputs)
         self.crossing = crossing.CrossingEngine.from_config(cfg.crossing)
         self._crossing_failed = False
         self._drop_connection()
@@ -655,6 +679,7 @@ class KVMController:
             # changes rather than waiting for the next reconnect.
             self.send_arrangement(edge, cfg.crossing.get("arrangement_set_at", 0))
         self.trigger_code = KEY_NAME_TO_CODE[cfg.trigger_key]
+        self.ignore_gate.configure(cfg.ignored_inputs)
         self.crossing = crossing.CrossingEngine.from_config(cfg.crossing)
         self._crossing_failed = False
 
@@ -726,6 +751,7 @@ class KVMController:
         self._set_cursor_follows_mouse(True)
         self.cursor_pin_point = None
         self.translator.reset_mouse_accumulators()
+        self.ignore_gate.reset()
         self.crossing.reset()
         self._forget_round_trips()
         if was_redirecting:
@@ -956,10 +982,17 @@ class KVMController:
                 )
                 if result.is_trigger:
                     return self._handle_trigger(result, event)
+                if self.redirecting:
+                    keycode = self.quartz.CGEventGetIntegerValueField(event, self.quartz.kCGKeyboardEventKeycode)
+                    if self.ignore_gate.keeps(ignored.key(keycode), result.is_down):
+                        return event
                 messages = result.messages
             else:
                 if not self.redirecting:
                     return self._handle_local_mouse(event_type, event)
+                button = self.translator.button_of(event_type, event)
+                if button is not None and self.ignore_gate.keeps(ignored.button(button[0]), button[1]):
+                    return event
                 messages = self.translator.mouse_messages(event_type, event)
             if not self.redirecting:
                 return event
@@ -1114,8 +1147,8 @@ class KVMController:
     def _handle_system_event(self, event):
         """Forward a media/volume key press. Anything that is not one --
         brightness, keyboard backlight, and the undocumented subtypes that
-        share NSSystemDefined -- passes through to macOS untouched, as does
-        everything when not redirecting."""
+        share NSSystemDefined -- passes through to macOS untouched, as does a
+        media key kept on this Mac and everything when not redirecting."""
         if not self.redirecting:
             return event
         try:
@@ -1129,6 +1162,8 @@ class KVMController:
         if media is None:
             return event
         name, is_down, _is_repeat = media
+        if self.ignore_gate.keeps(ignored.media(name), is_down):
+            return event
         message_type = protocol.MSG_KEYDOWN if is_down else protocol.MSG_KEYUP
         wire_name = self.cfg.key_map.get(name, name)
         try:
@@ -1274,6 +1309,8 @@ class KVMController:
     def _connect_once(self):
         sock = None
         fallback = False
+        # Read once: update_config can replace self.cfg from the AppKit thread mid-handshake.
+        endpoint = (self.cfg.host, self.cfg.port, self.cfg.auth_token)
         self.connection_status = f"Connecting to {self.cfg.host}:{self.cfg.port}"
         try:
             try:
@@ -1294,6 +1331,8 @@ class KVMController:
             try:
                 protocol.recv_preamble(sock, session)
             except socket.timeout:
+                if self.answered == endpoint:
+                    raise _HandshakeError("Windows stopped responding") from None
                 raise _HandshakeError(OLD_RECEIVER_STATUS) from None
             except protocol.VersionMismatch as exc:
                 raise _HandshakeError(
@@ -1377,6 +1416,7 @@ class KVMController:
             self.last_ack_at = now
         self.connected_at = now
         self.last_send_at = now
+        self.answered = endpoint
         if fallback:
             self.connection_status = "Connected to Windows via secure macOS 27 fallback"
             self.logger.info("connected to Windows through the SSH fallback")

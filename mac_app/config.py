@@ -64,6 +64,8 @@ class Config:
     # the PC's input arriving here. Off stops that direction only; the other keeps working.
     send_to_windows: bool = True
     allow_windows_to_drive: bool = True
+    # Keys and buttons that stay on this Mac while its input is on Windows; see ignored.py.
+    ignored_inputs: list = field(default_factory=list)
 
 
 def key_map_style(key_map):
@@ -130,4 +132,5 @@ def load_config(path: str = None) -> Config:
         mac_address=str(raw.get("mac_address", "") or ""),
         send_to_windows=raw.get("send_to_windows", True) is not False,
         allow_windows_to_drive=raw.get("allow_windows_to_drive", True) is not False,
+        ignored_inputs=raw.get("ignored_inputs", []),
     )

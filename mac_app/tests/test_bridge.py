@@ -1,3 +1,4 @@
+import dataclasses
 import errno
 import json
 import logging
@@ -925,6 +926,41 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.connection_status, OLD_RECEIVER_STATUS)
         self.assertTrue(sock.closed)
         self.assertIsNone(controller.sock)
+
+    def test_a_pc_that_answered_before_and_falls_silent_is_not_called_old(self):
+        # 23-09-2026: Windows stalled every app for 40s while it reconfigured its displays, and
+        # the Mac told Toby to update a Beamer that was already current.
+        answering, silent = FakeSocket(), FakeSocket()
+        seed_receiver_reply(answering, protocol.welcome_msg())
+        sockets = iter([answering, silent])
+        controller = KVMController(
+            make_config(),
+            logger=quiet_logger(),
+            quartz=FakeQuartz,
+            clock=self.clock,
+            socket_factory=lambda address, timeout: next(sockets),
+        )
+        self.assertTrue(controller._connect_once())
+        self.assertFalse(controller._connect_once())
+        self.assertEqual(controller.connection_status, "Windows stopped responding")
+        self.assertTrue(silent.closed)
+
+    def test_a_re_pair_forgets_that_the_old_pc_answered(self):
+        # A new token can be a different PC at the same address, and a silent one may be old.
+        answering, silent = FakeSocket(), FakeSocket()
+        seed_receiver_reply(answering, protocol.welcome_msg())
+        sockets = iter([answering, silent])
+        controller = KVMController(
+            make_config(),
+            logger=quiet_logger(),
+            quartz=FakeQuartz,
+            clock=self.clock,
+            socket_factory=lambda address, timeout: next(sockets),
+        )
+        self.assertTrue(controller._connect_once())
+        controller.update_config(dataclasses.replace(make_config(), auth_token="re-paired-token"))
+        self.assertFalse(controller._connect_once())
+        self.assertEqual(controller.connection_status, OLD_RECEIVER_STATUS)
 
     def test_other_wire_version_in_the_preamble_is_reported(self):
         sock = FakeSocket()

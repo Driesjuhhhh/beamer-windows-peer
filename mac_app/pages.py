@@ -14,7 +14,8 @@ PAGES = (
     ("design", "Design", "paintpalette",
      "How crossing looks and feels on this Mac: the notch, the edge and the trackpad. Every change applies as you make it."),
     ("keyboard", "Keyboard", "keyboard",
-     "The key that switches input, and how the Mac's modifier keys arrive on Windows."),
+     "The key that switches input, which keys and buttons stay on this Mac, and how its modifier "
+     "keys arrive on Windows."),
     ("pairing", "Pairing", "link",
      "Connect this Mac to a PC by typing the code the PC shows. Once per Mac."),
     ("connection", "Connection", "network",

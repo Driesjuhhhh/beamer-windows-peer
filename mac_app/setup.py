@@ -23,6 +23,7 @@ setup(
         "crossing",
         "desktop_mac",
         "gestures",
+        "ignored",
         "input_injector_mac",
         "key_codes",
         "link_state",

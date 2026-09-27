@@ -14,8 +14,10 @@ import AppKit
 import Quartz
 import objc
 
+import media_keys
 import theme
-from key_codes import KEY_NAME_TO_CODE, SPECIAL_KEY_NAMES
+from ignored_titles import recorded_entry
+from key_codes import KEY_NAME_TO_CODE, SPECIAL_KEY_NAMES, key_title
 
 
 def _autolayout(view):
@@ -389,6 +391,12 @@ class Pressable(AppKit.NSView):
         if ring is not None:
             inset = getattr(self, "ring_inset", -3.0)
             ring.setFrame_(AppKit.NSInsetRect(self.bounds(), inset, inset))
+
+    def resetCursorRects(self):
+        # A pointing hand is for the one Pressable that opens something outside the app (the
+        # sidebar's link back); every other one is a control, which macOS leaves as the arrow.
+        if getattr(self, "pointer_cursor", False):
+            self.addCursorRect_cursor_(self.bounds(), AppKit.NSCursor.pointingHandCursor())
 
     @objc.python_method
     def _ring(self, on):
@@ -953,27 +961,6 @@ class Ruler:
             self.on_change(value)
 
 
-# What the settings window calls a key. Names the wire and config keep as they are.
-KEY_TITLES = {
-    "alt": "Left Option",
-    "alt_r": "Right Option",
-    "cmd": "Left Command",
-    "cmd_r": "Right Command",
-    "ctrl": "Left Control",
-    "ctrl_r": "Right Control",
-    "shift": "Left Shift",
-    "shift_r": "Right Shift",
-    "caps_lock": "Caps Lock",
-    "esc": "Escape",
-    "page_up": "Page Up",
-    "page_down": "Page Down",
-}
-
-
-def key_title(name):
-    return KEY_TITLES.get(name, name.replace("_", " ").title())
-
-
 class KeyRecorder:
     """A keycap that records the next key pressed as the trigger. Clicking arms it; the next key
     or modifier press that Beamer can use as a trigger becomes the value, anything else cancels.
@@ -1037,6 +1024,92 @@ class KeyRecorder:
             AppKit.NSEvent.removeMonitor_(self.monitor)
             self.monitor = None
         self.key.set(key_title(self.value), ink="ink")
+        self.hint.set(self.HINT)
+        paint(self.view, "edge")
+
+
+class IgnoredRecorder:
+    """A keycap that records the next key, mouse button or media key as an entry to keep on this
+    Mac while its input is on Windows. Clicking arms it; the left mouse button is never recorded,
+    since a left click on the control is what cancels it. The current trigger key refuses rather
+    than recording -- it always stays with Beamer -- and `on_recorded` is called with None for
+    that refusal. Recorded through a local event monitor, same as KeyRecorder, so it works before
+    either Mac permission is granted."""
+
+    TITLE = "Add a key or button"
+    RECORDING_TITLE = "Press a key or button…"
+    HINT = "Click, then press it"
+    RECORDING_HINT = "Click again to cancel"
+
+    def __init__(self, trigger_code, on_recorded=None):
+        self.trigger_code = trigger_code
+        self.on_recorded = on_recorded
+        self.monitor = None
+        self.view = pressable(self._clicked, "edge", radius=theme.RADIUS["keycap"])
+        self.view.setAccessibilityLabel_("Add a key or button that stays on this Mac")
+        face = box("ground", radius=theme.RADIUS["keycap"] - 1)
+        self.view.addSubview_(face)
+        pin(face, self.view, (1, 1, 3, 1))
+        self.title = Label(self.TITLE, theme.TYPE["keycap"], mono=True, tracking=-0.02)
+        squeeze(self.title.view)
+        self.hint = Label(self.HINT, theme.TYPE["small"], ink="ink_3", align=AppKit.NSTextAlignmentRight)
+        line = stack(vertical=False, spacing=10)
+        line.addArrangedSubview_(self.title.view)
+        line.addArrangedSubview_(self.hint.view)
+        hug(self.title.view, AppKit.NSLayoutPriorityDefaultLow)
+        face.addSubview_(line)
+        pin(line, face, (9, 12, 8, 12))
+
+    def set_trigger_code(self, trigger_code):
+        self.trigger_code = trigger_code
+
+    def _clicked(self):
+        if self.monitor is not None:
+            self._stop()
+            return
+        self.title.set(self.RECORDING_TITLE, ink="signal")
+        self.hint.set(self.RECORDING_HINT)
+        paint(self.view, "signal")
+        mask = (
+            AppKit.NSEventMaskKeyDown
+            | AppKit.NSEventMaskFlagsChanged
+            | AppKit.NSEventMaskRightMouseDown
+            | AppKit.NSEventMaskOtherMouseDown
+            | AppKit.NSEventMaskSystemDefined
+        )
+        self.monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(mask, self._recorded)
+
+    def _recorded(self, event):
+        event_type = event.type()
+        if event_type == AppKit.NSEventTypeSystemDefined:
+            # Brightness, Mission Control and several undocumented events share this subtype-8
+            # event type; only NX_SUBTYPE_AUX_CONTROL_BUTTONS is a media key.
+            if int(event.subtype()) != media_keys.NX_SUBTYPE_AUX_CONTROL_BUTTONS:
+                return event
+            entry = recorded_entry("media", int(event.data1()), self.trigger_code)
+            if entry is None:
+                # A key going up, or one Beamer does not track, such as brightness: it keeps
+                # working, and the recorder keeps listening.
+                return event
+        elif event_type == AppKit.NSEventTypeRightMouseDown:
+            entry = recorded_entry("right", 0, self.trigger_code)
+        elif event_type == AppKit.NSEventTypeOtherMouseDown:
+            entry = recorded_entry("other", int(event.buttonNumber()), self.trigger_code)
+        else:
+            entry = recorded_entry("key", int(event.keyCode()), self.trigger_code)
+        self._stop()
+        if self.on_recorded is not None:
+            self.on_recorded(entry)
+        return None
+
+    def cancel(self):
+        self._stop()
+
+    def _stop(self):
+        if self.monitor is not None:
+            AppKit.NSEvent.removeMonitor_(self.monitor)
+            self.monitor = None
+        self.title.set(self.TITLE, ink="ink")
         self.hint.set(self.HINT)
         paint(self.view, "edge")
 
@@ -1121,9 +1194,10 @@ class Sidebar:
     """The window's page list under a link block that stays in view whichever page is open: the
     LED, the state word in its tone and the peer. Each row is a focusable control, and while one
     has focus the up and down arrows move the selection. `pages` is (key, name, SF Symbol, ...)
-    per row; `on_select` gets the key of a row the user chose."""
+    per row; `on_select` gets the key of a row the user chose. `footer_text`, if given, is a quiet
+    line pinned to the foot of the sidebar, opening `on_footer` when clicked."""
 
-    def __init__(self, pages, on_select):
+    def __init__(self, pages, on_select, footer_text=None, footer_label=None, on_footer=None):
         self.on_select = on_select
         self.keys = [page[0] for page in pages]
         self.selected = None
@@ -1198,6 +1272,20 @@ class Sidebar:
             add(list_stack, row)
             self.rows[key] = (name, row, icon, words, bar, dot)
         add(column, rows)
+
+        if footer_text and on_footer is not None:
+            footer = pressable(on_footer)
+            footer.pointer_cursor = True
+            footer.setAccessibilityLabel_(footer_label or footer_text)
+            footer_label_view = Label(footer_text, theme.TYPE["small"], ink="ink_3", wrap=True)
+            footer.addSubview_(footer_label_view.view)
+            pin(footer_label_view.view, footer, (8, 16, 8, 14))
+            self.view.addSubview_(footer)
+            AppKit.NSLayoutConstraint.activateConstraints_([
+                footer.leadingAnchor().constraintEqualToAnchor_(self.view.leadingAnchor()),
+                footer.trailingAnchor().constraintEqualToAnchor_(self.view.trailingAnchor()),
+                footer.bottomAnchor().constraintEqualToAnchor_(self.view.bottomAnchor()),
+            ])
 
     def select(self, key):
         self.selected = key

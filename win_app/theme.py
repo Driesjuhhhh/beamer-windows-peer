@@ -30,7 +30,8 @@ COUNT = 30.0
 # The sidebar's fixed width. Windows does not reflow it with the window the way the Mac's
 # does; a fixed width leaves 640 - SIDEBAR_WIDTH - 1 of content, which every page's grid is
 # laid out to fit.
-SIDEBAR_WIDTH = 168
+# 176, not 168, so the foot's kalkmancode.co.uk/beamer fits as Windows draws it.
+SIDEBAR_WIDTH = 176
 
 # The pairing code sits beside the countdown and the Pair button now, in a page narrower than
 # the window used to be with no sidebar -- tokens.TYPE["code"] (92px, shared with the Mac's own
@@ -136,6 +137,7 @@ def stylesheet() -> str:
         button=round(TYPE["button"]),
         r_field=round(RADIUS["field"]),
         r_button=round(RADIUS["button"]),
+        r_keycap=round(RADIUS["keycap"]),
     )
     return _TEMPLATE.format(**values)
 
@@ -210,6 +212,54 @@ QPushButton[vernier="page"]:hover {{ background: {well}; color: {ink}; }}
 QPushButton[vernier="page"]:checked {{ background: {well}; color: {ink}; font-weight: 700; }}
 QPushButton[vernier="page"]:focus {{ border: 1px solid {signal}; padding: 7px 11px; }}
 
+QPushButton[vernier="foot"] {{
+    background: transparent;
+    border: 0;
+    color: {ink_3};
+    font-size: 11px;
+    font-weight: 400;
+    padding: 12px 4px 14px 16px;
+    text-align: left;
+}}
+QPushButton[vernier="foot"]:hover {{ color: {ink_2}; }}
+QPushButton[vernier="foot"]:focus {{ border: 1px solid {signal}; padding: 11px 3px 13px 15px; }}
+QPushButton[vernier="keycap"] {{
+    background: {ground};
+    border: 1px solid {edge};
+    border-bottom: 3px solid {edge};
+    border-radius: {r_keycap}px;
+    padding: 0;
+}}
+QPushButton[vernier="keycap"]:hover {{ border-color: {ink_3}; }}
+QPushButton[vernier="keycap"]:focus {{ border-color: {signal}; }}
+QPushButton[vernier="keycap-live"] {{
+    background: {ground};
+    border: 1px solid {signal};
+    border-bottom: 3px solid {signal};
+    border-radius: {r_keycap}px;
+    padding: 0;
+}}
+QLabel[vernier="keycap"] {{ color: {ink}; }}
+QLabel[vernier="keycap-live"] {{ color: {signal}; }}
+QLabel[vernier="small"] {{ color: {ink_3}; font-size: {small}px; }}
+QLabel[vernier="tile-name"] {{ color: {ink}; font-size: {body}px; font-weight: 600; }}
+QFrame[vernier="tile"] {{ background: {ground}; border: 1px solid {rule}; border-radius: {r_button}px; }}
+QFrame[vernier="tile"]:hover {{ border-color: {edge}; }}
+QFrame[vernier="tile"]:focus {{ border: 2px solid {signal}; }}
+QFrame[vernier="tile-on"] {{ background: {ground}; border: 2px solid {ink}; border-radius: {r_button}px; }}
+QFrame[vernier="tile-on"]:focus {{ border: 2px solid {signal}; }}
+QFrame[vernier="tile-on"]:disabled {{ border-color: {edge}; }}
+QFrame[vernier="entry"] {{ background: {well}; border: 1px solid {rule}; border-radius: {r_field}px; }}
+QPushButton[vernier="remove"] {{
+    background: transparent;
+    border: 0;
+    color: {ink_3};
+    font-size: {small}px;
+    font-weight: 500;
+    padding: 2px 6px;
+}}
+QPushButton[vernier="remove"]:hover {{ color: {fault}; }}
+QPushButton[vernier="remove"]:focus {{ border: 1px solid {signal}; padding: 1px 5px; }}
 QCheckBox {{ background: transparent; color: {ink}; font-size: {body}px; spacing: 8px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid {edge}; border-radius: 3px; background: {well}; }}
 QCheckBox::indicator:hover {{ border-color: {ink_3}; }}

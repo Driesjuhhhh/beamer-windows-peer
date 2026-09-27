@@ -11,14 +11,15 @@ import threading
 import time
 from typing import Optional
 
-from PySide6.QtCore import QObject, QRectF, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
@@ -35,6 +36,7 @@ from app_config import (
     Config,
     ConfigError,
     TRIGGER_KEYS,
+    TRIGGER_VKS,
     default_config,
     default_config_path,
     load_config,
@@ -43,8 +45,9 @@ from app_config import (
 )
 import autostart_win
 import capture_win
-from edge_glow import EdgeGlow
+from edge_glow import EdgeGlow, GlowPreview as EdgeGlowPreview, PreviewLoop
 import firewall_win
+import ignored
 from pairing import PAIRING_PORT, Announcer, local_address_towards
 import pages_win
 import protocol
@@ -63,6 +66,9 @@ try:
     VERSION = (Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent.parent) / "VERSION").read_text().strip()
 except OSError:
     VERSION = "dev"
+
+HOME_PAGE = "https://kalkmancode.co.uk/beamer"
+HOME_PAGE_TEXT = "kalkmancode.co.uk/beamer"
 
 IDLE_CODE = "––– –––"
 PAIR_HINT = "Press Pair a Mac, then type this code into Beamer on the Mac."
@@ -224,6 +230,7 @@ class WindowsApplication(QWidget):
         self.sender = MacSender(
             status_callback=self.bridge.sending.emit,
             redirect_callback=self.bridge.redirecting.emit,
+            pressure_callback=self.bridge.pressure.emit,
             arrangement_callback=self.bridge.arrangement.emit,
         )
         self.sender.send_peer_home = self.server.send_home
@@ -244,6 +251,7 @@ class WindowsApplication(QWidget):
         self.resize(820, 720)
         self.setMinimumSize(*tokens.MIN_WINDOW["windows"])
         self.setWindowIcon(QIcon(str(ICON_PATH)))
+        self.preview_loop = PreviewLoop(self)
         self._build_window()
         self._apply_theme()
         self._build_tray()
@@ -272,7 +280,10 @@ class WindowsApplication(QWidget):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(0)
 
-        self.sidebar = widgets.Sidebar(pages_win.PAGES, self._select_page)
+        self.sidebar = widgets.Sidebar(
+            # Two lines: one, at the sidebar's fixed width, cuts the address off.
+            pages_win.PAGES, self._select_page, foot=f"Beamer {VERSION}\n{HOME_PAGE_TEXT}", on_foot=self.open_home_page
+        )
         self.sidebar.setFixedWidth(theme.SIDEBAR_WIDTH)
         row_layout.addWidget(self.sidebar)
         row_layout.addWidget(widgets.rule())
@@ -294,6 +305,8 @@ class WindowsApplication(QWidget):
         builders = {
             "overview": self._overview_page,
             "crossing": self._crossing_page,
+            "design": self._design_page,
+            "keyboard": self._keyboard_page,
             "pairing": self._pairing_page,
             "connection": self._connection_page,
             "firewall": self._firewall_page,
@@ -336,6 +349,9 @@ class WindowsApplication(QWidget):
         self._page = key
         self.stack.setCurrentIndex(index)
         self.sidebar.select(key)
+        if key != "keyboard":
+            self.ignored_recorder.cancel()
+        self._run_previews()
 
     # -- Overview ---------------------------------------------------------------------------
 
@@ -377,6 +393,7 @@ class WindowsApplication(QWidget):
         self.send_switch.toggled.connect(self._toggle_sending)
         module.body.addWidget(self.send_switch)
         self.send_hint = widgets.label("", "note", wrap=True)
+        self.send_hint.setVisible(False)
         module.body.addWidget(self.send_hint)
         self.logon_switch = widgets.Switch("Start Beamer when you sign in")
         self.logon_switch.setFont(theme.font(theme.TYPE["body"]))
@@ -446,8 +463,6 @@ class WindowsApplication(QWidget):
     def _crossing_page(self, layout, current: Config) -> None:
         layout.addWidget(self._ways_module(current))
         layout.addWidget(self._resistance_module(current))
-        layout.addWidget(self._shortcut_module(current))
-        layout.addWidget(self._glow_module(current))
 
     def _ways_module(self, current: Config) -> QWidget:
         module = widgets.Module("Ways in")
@@ -512,6 +527,7 @@ class WindowsApplication(QWidget):
         self.sender.send_arrangement(mac_edge, self._config.arrangement_set_at)
         self.server.send_arrangement(mac_edge, self._config.arrangement_set_at)
         self.sender.update_config(self._config)
+        self._reflect_look()
 
     def _set_corner(self, corner: str) -> None:
         if self._config is None:
@@ -536,6 +552,7 @@ class WindowsApplication(QWidget):
         self._persist()
         self.sender.update_config(self._config)
         self.edge_choice.set_value(pc_edge)
+        self._reflect_look()
 
     def _resistance_module(self, current: Config) -> QWidget:
         module = widgets.Module("Resistance")
@@ -571,6 +588,76 @@ class WindowsApplication(QWidget):
         )
         if text != self.resistance_hint.text():
             self.resistance_hint.setText(text)
+
+    # -- Keyboard -----------------------------------------------------------------------------
+
+    def _keyboard_page(self, layout, current: Config) -> None:
+        layout.addWidget(self._shortcut_module(current))
+        layout.addWidget(self._ignored_module(current))
+
+    def _ignored_module(self, current: Config) -> QWidget:
+        module = widgets.Module("Stays on this PC")
+        self.ignored_note = widgets.label("", "note", wrap=True)
+        module.body.addWidget(self.ignored_note)
+        self.ignored_list = QVBoxLayout()
+        self.ignored_list.setSpacing(4)
+        module.body.addLayout(self.ignored_list)
+        self.ignored_recorder = widgets.InputRecorder("Add a key or button", self._record_ignored, capture_win.hook_vk)
+        module.body.addWidget(self.ignored_recorder)
+        self._show_ignored(list(current.ignored_inputs))
+        return module
+
+    def _show_ignored(self, entries: list, refused: str = "") -> None:
+        while self.ignored_list.count():
+            item = self.ignored_list.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        for entry in entries:
+            row = QFrame()
+            row.setProperty("vernier", "entry")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(12, 6, 6, 6)
+            name = widgets.label(capture_win.input_title(entry), "readout")
+            row_layout.addWidget(name, 1)
+            remove = QPushButton("Remove")
+            remove.setProperty("vernier", "remove")
+            remove.setCursor(Qt.CursorShape.PointingHandCursor)
+            remove.setAccessibleName(f"Remove {capture_win.input_title(entry)}")
+            remove.clicked.connect(lambda _checked=False, e=entry: self._remove_ignored(e))
+            row_layout.addWidget(remove)
+            self.ignored_list.addWidget(row)
+        text = refused or (
+            "These keep working on this PC while its input is on your Mac: a mouse's back button for "
+            "this PC's browser, say, or a volume key for its speakers."
+            if entries
+            else "Nothing yet. Every key and button goes to your Mac while it has input. Add one to keep "
+            "it here: a mouse's back button for this PC's browser, say, or a volume key for its speakers."
+        )
+        self.ignored_note.setText(text)
+        widgets.set_role(self.ignored_note, "note-amber" if refused else "note")
+
+    def _record_ignored(self, kind: str, value) -> None:
+        if self._config is None:
+            return
+        entries = list(self._config.ignored_inputs)
+        if kind == "key" and value == TRIGGER_VKS.get(self._config.trigger_key):
+            self._show_ignored(entries, "That key is the shortcut; it always stays with Beamer.")
+            return
+        entry = ignored.key(value) if kind == "key" else ignored.button(value)
+        if entry not in entries:
+            entries.append(entry)
+        self._set_ignored(entries)
+
+    def _remove_ignored(self, entry: str) -> None:
+        if self._config is None:
+            return
+        self._set_ignored([candidate for candidate in self._config.ignored_inputs if candidate != entry])
+
+    def _set_ignored(self, entries: list) -> None:
+        self._config.ignored_inputs = entries
+        self._persist()
+        self.sender.update_config(self._config)
+        self._show_ignored(entries)
 
     def _shortcut_module(self, current: Config) -> QWidget:
         module = widgets.Module("Shortcut")
@@ -636,29 +723,56 @@ class WindowsApplication(QWidget):
         self._configure_trigger(self._config)
         self._debounce_save()
 
-    def _glow_module(self, current: Config) -> QWidget:
-        module = widgets.Module("Glow")
-        module.body.addWidget(widgets.label("Lights the edge as you push toward your Mac.", "note", wrap=True))
+    # -- Design -------------------------------------------------------------------------------
+
+    def _design_page(self, layout, current: Config) -> None:
+        layout.addWidget(self._on_screen_module(current))
+        layout.addWidget(self._edge_look_module(current))
+
+    def _on_screen_module(self, current: Config) -> QWidget:
+        module = widgets.Module("On screen")
         self.glow_toggle = widgets.Switch("Light up the edge as you push")
         self.glow_toggle.setFont(theme.font(theme.TYPE["body"]))
         self.glow_toggle.setChecked(current.edge_glow)
         self.glow_toggle.toggled.connect(self._apply_look)
         module.body.addWidget(self.glow_toggle)
-        module.body.addWidget(widgets.label("Style", "key"))
-        self.glow_style_choice = widgets.Choice(
-            GLOW_STYLE_CHOICES, columns=2, current=current.glow_style, on_change=self._apply_look
+        module.body.addWidget(
+            widgets.label(
+                "Lights the edge of this PC that leads to your Mac as you push toward it. Switched "
+                "off, crossing still works. Your Mac sets how its own edge and notch look.",
+                "note",
+                wrap=True,
+            )
+        )
+        return module
+
+    def _edge_look_module(self, current: Config) -> QWidget:
+        module = widgets.Module("Edge and corner")
+        edge = current.mac_return_edge or "right"
+        self.glow_previews = {
+            style: EdgeGlowPreview(style, current.glow_colour, edge) for style, _title in GLOW_STYLE_CHOICES
+        }
+        for preview in self.glow_previews.values():
+            self.preview_loop.add(preview)
+        self.glow_style_choice = widgets.ChoiceTiles(
+            [
+                ("glow", "Glow", "A band of light that deepens the harder you push.", self.glow_previews["glow"]),
+                ("beam", "Beam", "A thin line with a comet of light running along it.", self.glow_previews["beam"]),
+            ],
+            current.glow_style,
+            on_change=self._apply_look,
         )
         module.body.addWidget(self.glow_style_choice.view)
         module.body.addWidget(widgets.label("Colour", "key"))
-        self.glow_colour_choice = widgets.Choice(
-            GLOW_COLOUR_CHOICES, columns=5, current=current.glow_colour, on_change=self._apply_look
-        )
+        self.glow_colour_choice = widgets.Swatches(GLOW_COLOUR_CHOICES, current.glow_colour, on_change=self._apply_look)
         module.body.addWidget(self.glow_colour_choice.view)
+        self._reflect_look()
         return module
 
     def _apply_look(self, *_ignored) -> None:
         """The glow's switch, style and colour save and apply the moment they change. They only
         decide how this PC's edge is drawn, so the receiver has no reason to restart for them."""
+        self._reflect_look()
         if self._config is None:
             return
         self._config.edge_glow = self.glow_toggle.isChecked()
@@ -667,6 +781,22 @@ class WindowsApplication(QWidget):
         self._persist()
         if not self._config.edge_glow and self.glow is not None:
             self.glow.hide()
+
+    def _reflect_look(self) -> None:
+        on = self.glow_toggle.isChecked()
+        self.glow_style_choice.set_enabled(on)
+        self.glow_colour_choice.set_enabled(on)
+        edge = (self._config.mac_return_edge if self._config is not None else "") or "right"
+        for preview in self.glow_previews.values():
+            preview.set_look(self.glow_colour_choice.value or "signal", edge)
+        self._run_previews()
+
+    def _run_previews(self) -> None:
+        """The previews play only while someone can see them: the Design page open in a visible
+        window, with the glow switched on."""
+        self.preview_loop.run(
+            self.isVisible() and not self.isMinimized() and self._page == "design" and self.glow_toggle.isChecked()
+        )
 
     def _debounce_save(self) -> None:
         """A ruler being dragged writes once at the end rather than on every step."""
@@ -1044,6 +1174,7 @@ class WindowsApplication(QWidget):
         self.drive_action.setChecked(self.allow_switch.isChecked())
         self.send_action.setChecked(self.send_switch.isChecked())
         menu.addSeparator()
+        menu.addAction("About Beamer").triggered.connect(self.show_about)
         menu.addAction("Quit Beamer").triggered.connect(self.quit)
         self.tray.setContextMenu(menu)
         # Left click opens the window; right click is the
@@ -1080,10 +1211,10 @@ class WindowsApplication(QWidget):
             return
         self.sender.start(config)
 
-    def _on_hook_key(self, name: str, down: bool) -> bool:
+    def _on_hook_key(self, name: str, down: bool, vk: Optional[int] = None) -> bool:
         """Every key, on the hook thread. The trigger is swallowed as it
         switches; everything else goes to the Mac only while the Mac has
-        input."""
+        input, and a key on the ignored list not even then."""
         action = self._trigger.feed(name, down, time.monotonic())
         if action is not None:
             if not self.sender.shortcut_armed:
@@ -1097,7 +1228,7 @@ class WindowsApplication(QWidget):
             return True
         if self._trigger.claims(name, down, self.sender.redirecting):
             return True
-        return self.sender.on_key(name, down)
+        return self.sender.on_key(name, down, vk)
 
     def _on_focus(self, target: str) -> None:
         """The Mac took input on this PC, or gave it back. Either way the
@@ -1132,6 +1263,7 @@ class WindowsApplication(QWidget):
         self._start_sending(self._config)
         self.mac_host_readout.setText(self._config.mac_host or "Not learned yet")
         self.edge_choice.set_value(self._config.mac_return_edge)
+        self._reflect_look()
 
     def _on_sending(self, connected: bool, detail: str) -> None:
         self._sending_detail = detail
@@ -1148,6 +1280,39 @@ class WindowsApplication(QWidget):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def open_home_page(self) -> None:
+        QDesktopServices.openUrl(QUrl(HOME_PAGE))
+
+    def show_about(self) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle("About Beamer")
+        box.setIconPixmap(QIcon(str(ICON_PATH)).pixmap(64, 64))
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            f"<b>Beamer {VERSION}</b><br>One keyboard and mouse for your Mac and PC.<br><br>"
+            f'<a href="{HOME_PAGE}" style="color: {theme.colour("signal")};">{HOME_PAGE_TEXT}</a>'
+        )
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        for text in box.findChildren(QLabel):
+            text.setOpenExternalLinks(True)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        box.show()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._run_previews()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self.ignored_recorder.cancel()
+        self._run_previews()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._run_previews()
 
     def quit(self) -> None:
         if self._closing:
@@ -1244,6 +1409,8 @@ class WindowsApplication(QWidget):
         ) else self._sending_detail
         if send_hint != self.send_hint.text():
             self.send_hint.setText(send_hint)
+            # Hidden while empty, or its spacing leaves a gap between the two switches.
+            self.send_hint.setVisible(bool(send_hint))
         self.sidebar.set_link(tone, SIDEBAR_LINK_WORDS.get(state, "Unknown"))
         self.sidebar.set_dots(pages_win.dots(self._config is None, self._firewall_tone))
         self._refresh_pairing()

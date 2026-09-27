@@ -59,7 +59,7 @@ MODIFIER_FLAG_NAMES = {
 # not one of them: a shifted character arrives as the character it produced.
 CHORD_MODIFIERS = {"cmd", "cmd_r", "alt", "alt_r", "ctrl", "ctrl_r"}
 
-BUTTONS = ("left", "right", "middle")
+BUTTONS = ("left", "right", "middle", "back", "forward")
 # How close together, in seconds and pixels, two clicks must be for the
 # second to count as a double click. Matches macOS's own default interval;
 # a click whose clickState is never set past 1 can never open a file.
@@ -199,11 +199,16 @@ MOVE_EVENTS = {
     "left": "kCGEventLeftMouseDragged",
     "right": "kCGEventRightMouseDragged",
     "middle": "kCGEventOtherMouseDragged",
+    "back": "kCGEventOtherMouseDragged",
+    "forward": "kCGEventOtherMouseDragged",
 }
 BUTTON_EVENTS = {
     "left": ("kCGEventLeftMouseDown", "kCGEventLeftMouseUp", "kCGMouseButtonLeft"),
     "right": ("kCGEventRightMouseDown", "kCGEventRightMouseUp", "kCGMouseButtonRight"),
     "middle": ("kCGEventOtherMouseDown", "kCGEventOtherMouseUp", "kCGMouseButtonCenter"),
+    # The side buttons have no CoreGraphics constant; they are other buttons 3 and 4.
+    "back": ("kCGEventOtherMouseDown", "kCGEventOtherMouseUp", 3),
+    "forward": ("kCGEventOtherMouseDown", "kCGEventOtherMouseUp", 4),
 }
 
 
@@ -222,7 +227,12 @@ def _post(event) -> None:
 
 def _mouse_event(event_name: str, x: int, y: int, button_name: Optional[str]):
     quartz = _require()
-    button = 0 if button_name is None else getattr(quartz, button_name)
+    if button_name is None:
+        button = 0
+    elif isinstance(button_name, int):
+        button = button_name
+    else:
+        button = getattr(quartz, button_name)
     event = quartz.CGEventCreateMouseEvent(
         None, getattr(quartz, event_name), quartz.CGPointMake(float(x), float(y)), button
     )

@@ -1,154 +1,331 @@
-# Beamer
+<p align="center"><img src="Beamer.svg" width="96" height="96" alt=""></p>
+<h1 align="center">Beamer</h1>
+<p align="center">One keyboard and one mouse or trackpad for a Mac and a Windows PC on the same network, in either direction.</p>
+<p align="center">
+  <a href="https://github.com/kalkman-code/beamer/releases/latest"><img src="https://img.shields.io/github/v/release/kalkman-code/beamer" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/kalkman-code/beamer" alt="Licence"></a>
+  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-lightgrey" alt="Platforms: macOS and Windows">
+  <a href="https://github.com/kalkman-code/beamer/releases"><img src="https://img.shields.io/github/downloads/kalkman-code/beamer/total" alt="Downloads"></a>
+</p>
 
-Beamer lets one keyboard and pointing device drive both machines over the local network, in either direction. Push the pointer off the edge of the screen and it crosses to the other machine, the way it would to another monitor; or double-tap the trigger key — Right Option on the Mac, Right Ctrl on the PC — and again to come back.
+![The pointer is pushed against the right-hand edge of a Mac's screen, the edge lights up as the push builds, and the pointer carries on onto the Windows PC beside it at the same height](assets/beamer-crossing.gif)
 
-The Mac's keyboard on Windows is the direction Beamer started with and the one everything is configured from. The PC's own keyboard and mouse go the other way across the same border, with nothing to set up on the PC: it learns where the Mac is and which of its edges leads back there from the Mac's own link, and its only choice is a switch to turn the whole thing off.
-
-Both sides are desktop apps with a dark control window and tray/menu-bar status. Traffic stays on the LAN, and the link is encrypted and authenticated end to end: both apps derive a key from the same shared token and every frame is sealed with it, so a peer that cannot decrypt a frame does not hold the token. The token itself is never transmitted.
+Push the pointer off the edge of the screen and it carries on onto the other machine, the way it
+would onto a second monitor. Or double-tap a key. The clipboard comes with you, your shortcuts
+still work, and nothing leaves your network.
 
 ## Download
 
-Installers for each release are on the [releases page](https://github.com/kalkman-code/beamer/releases): `Beamer-<version>.dmg` for macOS and `Beamer-Setup-<version>.exe` for Windows. On Windows, `winget install KalkmanCode.Beamer` installs the same thing.
+Free, with no account. Every installer is on the [releases page](https://github.com/kalkman-code/beamer/releases/latest).
 
-The Mac app is signed and notarised by Apple. The Windows installer is not code-signed — a certificate costs money and Beamer is free — so Windows shows "Windows protected your PC" the first time: choose More info, then Run anyway. Installing through winget does not show that warning. Everything the installer contains is built from this repository, and the sections below say how to build it yourself.
+| Platform | Get it | Notes |
+|---|---|---|
+| macOS 13 or later | `Beamer-<version>.dmg` | Signed and notarised by Apple |
+| Windows 10 and 11 | `Beamer-Setup-<version>.exe` | Not code-signed; see step 1 below |
+| Windows, through winget | `winget install KalkmanCode.Beamer` | The same installer, without the warning |
 
-Beamer is licensed under the GNU General Public License v3.0; see `LICENSE`. Releases up to and including 1.2.0 were MIT.
+## Quick start
 
-## Install on macOS
+1. **Install on both machines.** On the Mac, drag Beamer to Applications, open it, and press the
+   two Grant buttons on the Permissions page (Accessibility, then Input Monitoring). On Windows,
+   run the installer. It is not code-signed, because a certificate costs money and Beamer is free,
+   so Windows says "Windows protected your PC" the first time: choose More info, then Run anyway.
+   winget does not show that warning. Beamer on Windows runs as administrator, so expect one UAC
+   prompt when you open it.
+2. **Pair them.** On the PC, press Pair a Mac; a six-digit code appears. On the Mac, open the
+   Pairing page, choose the PC from the list and type the code. It lasts a minute and works once.
+3. **Cross.** Push the Mac's pointer off the right-hand edge of its screen, or double-tap Right
+   Option, and the Mac's keyboard and trackpad are on the PC. Push back through the PC's left edge,
+   or double-tap again, to come home. The PC's own keyboard and mouse go the other way: push
+   through the same edge, or double-tap Right Ctrl.
 
-Open the DMG and drag Beamer to Applications. To build from source instead, double-click `mac_app/Install-Beamer-Mac.command` from the repository root: it builds a self-contained app, installs it at `/Applications/Beamer.app`, and leaves it closed so permission prompts do not appear unexpectedly.
+That is all most people need. The edge, the keys and everything else can be changed in each
+machine's settings.
 
-Open `/Applications/Beamer.app`, then use its two separate Grant buttons for Accessibility and Input Monitoring. Beamer never requests both permissions at once. Relaunch once after both are enabled if the control window asks.
+## Screenshots
 
-Then pair. The Pair section lists every PC on the network that is running Beamer. Press Pair a Mac in Beamer on the PC, choose that PC in the list, type the six-digit code the PC is showing, and the address, port and shared token are filled in and saved. The code lasts one minute and works once; a wrong code cancels it, and the PC hands out a fresh one on the next press.
+| Mac | Windows |
+|---|---|
+| <img src="assets/mac-overview.png" width="400" alt="Beamer's Overview page on the Mac: where input is, whether the link is up, and the two everyday controls"> | <img src="assets/windows-overview.png" width="400" alt="Beamer's Overview page on Windows: where input is, and a switch for each direction"> |
+| <img src="assets/mac-design.png" width="400" alt="Beamer's Design page on the Mac: the notch and edge styles with live previews, and the colour schemes"> | <img src="assets/windows-design.png" width="400" alt="Beamer's Design page on Windows: the glow switch, Glow and Beam with live previews, and the colour schemes"> |
 
-Pairing is the easy path, not the only one. The Connection fields still take an address, port and shared token typed by hand, exactly as before, and an existing set-up carries on working untouched.
+## What it does
 
-The app runs in the Dock and menu bar. Closing the control window leaves the sender running; use the menu-bar Quit command to stop it.
+- **Push through the edge.** Off the edge that faces the other machine, through a corner, or up
+  through the MacBook's notch. The pointer arrives at the same point along the border. The edge
+  lights up as you push, and the trackpad ticks at every quarter of the way through.
+- **Or press a key.** Double-tap or hold a trigger key to switch without moving the pointer. Right
+  Option on the Mac and Right Ctrl on the PC to start with; on the Mac it can be any key you like.
+- **Either way round.** The Mac drives the PC and the PC drives the Mac. Each machine has a switch
+  per direction, so you can turn one way off and keep the other.
+- **The clipboard comes with you.** Text and images, both ways, at the moment you switch. Files
+  stay where they are.
+- **Your shortcuts still work.** Cmd becomes Ctrl and Option becomes Alt on Windows, so Cmd+C
+  copies there too. The PC gets the reverse: its Ctrl+C arrives on the Mac as Cmd+C.
+- **Media keys follow you.** Play, pause, skip, mute and volume act on whichever machine you are
+  driving. Brightness stays with the Mac.
+- **Keys and buttons that stay put.** Each machine keeps a list of keys and mouse buttons that keep
+  working where they were pressed while its input is on the other one: a mouse's back button for
+  this machine's browser, a volume key for its speakers. Add one by pressing it. The back and
+  forward side buttons cross in both directions otherwise.
+- **Mac gestures on Windows.** Three or four fingers up for Task View, down for the desktop, left
+  and right to change virtual desktop, all from the Mac's trackpad.
+- **Make it yours.** The edge as a glow or a beam, five colour schemes, the notch as a beam or an
+  island with a meter, and how hard you push before it crosses.
+- **Out of the way when it should be.** A full-screen app holds the edges, so a game or a film never
+  loses the pointer; the trigger key still works. Switch to a PC that is asleep and Beamer wakes it.
+- **Your network, nobody else's.** No server in the middle. The two machines talk to each other
+  directly, encrypted, and you pair them once with a six-digit code. More in [SECURITY.md](SECURITY.md).
+- **Free and open source.** No account, no subscription, GPL-3.0.
 
-macOS 27 beta 4 can block a signed app's local-network access even when Terminal can reach the same host. Until Apple fixes that OS fault, open `/Applications/Beamer Tunnel.command`, leave its Terminal window running, then open `/Applications/Beamer.app`. Beamer will use the localhost tunnel only when its direct connection is blocked.
+## Settings
 
-## Install on Windows
+Each machine has its own settings window and makes its own choices about how input leaves it.
+Both sidebars end with the version and a link to kalkmancode.co.uk/beamer, and both menus have
+About Beamer.
 
-Run `Beamer-Setup-<version>.exe`, or `winget install KalkmanCode.Beamer`. The installer puts Beamer in `%LOCALAPPDATA%\Beamer` for the current user and adds a Start menu shortcut; Beamer adds its own firewall rules the first time it starts elevated. Quit Beamer from the tray before installing a newer version over it.
+| Page | Mac | Windows |
+|---|---|---|
+| Overview | Where input is, the link, the everyday controls, start at login | Where input is, a switch per direction, start at sign-in |
+| Crossing | Ways in (edge, corner, notch, shortcut), which edge, resistance | Ways in (edge, corner, shortcut), the arrangement with the Mac, resistance |
+| Design | Notch style, edge glow or beam, colour scheme, haptics, with live previews | Glow on or off, Glow or Beam, colour scheme, with live previews |
+| Keyboard | Trigger key (recorded), double-tap or hold, modifier style, what stays on this Mac | Trigger key, double-tap or hold, what stays on this PC |
+| Pairing | Choose a PC and type its code | Pair a Mac shows the code |
+| Connection | The PC's address, port and token | This PC's address, port and token |
+| Permissions / Firewall | Accessibility and Input Monitoring | Whether Windows Firewall lets the Mac in, with a one-button fix |
 
-To build from source instead, from the repository root, run `win_app\Install-Beamer.ps1` **from an admin PowerShell**. The installer builds and installs `%LOCALAPPDATA%\Beamer\Beamer.exe`, creates a Start menu shortcut, and adds two inbound Private-network firewall rules: TCP 24820 for input and UDP 24821 for pairing (both below 49152, out of the range Windows and macOS hand out for themselves). Run from a non-admin PowerShell and the installer still builds and installs the app, but it warns and skips the firewall rules; the app adds them itself on its first elevated start. Starting at logon is the app's own switch on its Overview page, which writes and removes the elevated `Beamer` scheduled task; no installer touches it.
+Which edge of the Mac leads to the PC is one setting either machine can change; the two keep it in
+step, so the border is always the same one seen from both ends.
 
-Open Beamer and press Pair a Mac. A six-digit code appears, large enough to read from the Mac, and this PC announces itself on the network so the Mac can list it by name. Type the code into Beamer on the Mac within a minute and the two agree a shared token between themselves, which each saves; the token itself is never sent, and the code is good for one attempt. Nothing needs typing on the PC. The Connection fields below it still accept a port and a token entered by hand for anyone already set up that way.
+## Known limits
 
-The app checks that rule itself. The Receiver panel says in one sentence whether Windows Firewall lets the Mac in, and offers one button for whichever of the three things usually stops it: the rule is missing because the installer ran non-elevated (the button adds it), Cancel was pressed on Windows' own "allow this app" prompt, which writes a block rule that beats any allow rule and survives a reinstall (the button removes the block and adds the rule), or Windows has classed the network as public, where the Private-only rule does not apply (the button marks the network private rather than opening the port on every public network). It reads the firewall when the receiver starts listening and after a fix, not on a timer.
+- **The Windows secure desktop cannot be driven.** UAC prompts, Ctrl+Alt+Del and the lock screen
+  refuse input from any app by design, and Ctrl+Alt+Del cannot be sent at all. Use the PC's own
+  keyboard there.
+- **Files do not cross**, only text and images, up to 256KB of text and an 8MB image.
+- **AltGr is out of reach from the Mac.**
+- **The Windows installer is unsigned.** SmartScreen warns until it has a download history; winget
+  avoids it.
+- **macOS 27 beta 4 could block a signed app's local-network access** even when Terminal could
+  reach the PC. The DMG includes `Beamer Tunnel.command` for that case: open it, leave its window
+  running, then open Beamer, which uses the tunnel only when its direct connection is blocked.
 
-The Windows receiver runs elevated (the exe carries a `requireAdministrator` manifest) so its `SendInput` calls can still reach a focused elevated window, such as an admin Command Prompt or PowerShell — Windows UIPI silently drops input from a non-elevated sender aimed at an elevated one, which is why those windows used to ignore remote input. Launching `Beamer.exe` outside of the logon task (double-clicking it, or the installer's own launch-at-the-end) shows one UAC prompt, same as any other admin app.
+## In detail
 
-The Windows address shown in the app is the value the Mac connects to; pairing fills it in on both sides. The listen port and shared token must match both apps.
+<details>
+<summary><strong>Connection states</strong></summary>
 
-The **To the Mac** card is the other direction: this PC's keyboard and mouse on the Mac. It is on by default and needs nothing typed — the address and the edge come from the Mac. Push this PC's pointer through the same edge input comes home by and it carries on onto the Mac; double-tap Right Ctrl to send it across without the pointer, and again to bring it back. Turning the switch off puts the keyboard hooks away entirely.
+Written from the Mac, which connects to the PC. The PC's link to the Mac reports the mirror of
+them, naming the Mac.
 
-Closing the Windows control window leaves the receiver in the system tray. Beamer enforces one running instance, so launching it again cannot create a second receiver or duplicate tray icon. If an older, non-elevated Beamer is still running when you reinstall, quit it from the tray first — the installer's own instance check can't stop an elevated process from a non-admin session.
+| Status | Meaning |
+|---|---|
+| `Connected to <address>:<port>` | The encrypted link is up: the PC decrypted the Mac's first frame, so both hold the same token, and the protocol versions match. Reads `Connected to Windows via secure macOS 27 fallback` when the tunnel is carrying it. |
+| `Windows is reachable, but Beamer is not listening on this port.` | The PC answered but nothing accepted the TCP port. |
+| `Windows could not be authenticated — check the shared token matches on both sides` | The two derived different keys. The tokens differ. |
+| `Windows is unreachable from this Mac` | Nothing got as far as Beamer or the firewall. Check Wi-Fi client isolation, the PC's network, and that the Mac can resolve its address. |
+| `Windows did not answer the handshake — it is probably running an older Beamer; update it` | A PC that has never completed a handshake this run is silent, as a Beamer from before encryption is. |
+| `Windows receiver speaks Beamer protocol vN, this Mac vM — update both apps` | The wire versions differ. The version travels in cleartext at the start of the connection, so a mismatch says so rather than hanging. |
+| `Windows stopped responding` | No ping or acknowledgement for about two seconds. |
 
-The Windows secure desktop — UAC consent prompts themselves, and Ctrl+Alt+Del — cannot receive remote input by OS design, elevated or not; use the PC's own keyboard and mouse there.
+Both ends notice a dead link within a few seconds. The PC enforces a 2.5-second read timeout and
+the Mac pings at least once a second while idle, so the PC is back to waiting for the Mac within
+about three seconds; the Mac notices in about two and takes its input back.
 
-## The lock screen
+The Mac always fails open. A dropped connection, a missing acknowledgement, a crashed capture
+worker or a full event queue returns input to the Mac at once. A watchdog runs for as long as a
+socket exists, so a half-open connection is caught and the Mac reconnects even if you never
+switched. Trying to switch while the link is down beeps and posts a notification.
 
-Beamer still cannot *type* on the lock screen, and no amount of elevation would let it: the lock screen is the Winlogon secure desktop, whose security descriptor admits only SYSTEM, and `SendInput` only reaches the desktop its calling thread is attached to. Instead of typing on it, Beamer takes the PC off it.
+</details>
 
-On a PC with the author's separate unlock credential provider installed (not part of this repository), switching input to a locked PC signals that provider, which submits a stored password as SYSTEM; the console returns to the desktop in about four seconds, and input sent meanwhile is dropped rather than queued. Beamer only signals the provider's trigger event and never holds a password. Without the provider, which is every other PC, the Mac reports `Windows is locked — unlock it at the PC`: unlock it with the PC's own keyboard.
+<details>
+<summary><strong>Crossing</strong></summary>
 
-## Connection states
+Push the pointer at the outer edge and it does not move: the push builds as pressure, the edge
+lights up, the trackpad ticks at each quarter, and once you have pushed far enough the boundary
+gives. The resistance is the point. An edge that switches the instant you touch it does so every
+time you overshoot a close button. The default is 120 points; zero switches on contact.
 
-The states below are written from the Mac, which is the side that connects. The PC's own link to the Mac reports the mirror of them in the **To the Mac** card, and its receiver's states name the Mac rather than Windows.
+| Way in | Where it triggers | Mac | PC |
+|---|---|---|---|
+| Shortcut | Double-tap the trigger key, or hold it | Yes | Yes |
+| Edge | The whole of one outer edge of the desktop | Yes | Yes |
+| Corner | An 8pt box in one corner, needing a diagonal push | Yes | Yes |
+| Notch | The top edge, only within the notch's width | Yes | No |
 
-- `Connected to <address>:<port>`: the encrypted link is up — Windows decrypted the Mac's first frame, proving both sides hold the same token, and the protocol versions match. Shows as `Connected to Windows via secure macOS 27 fallback` when the SSH tunnel above is carrying the connection instead.
-- `Windows is reachable, but Beamer is not listening on this port.`: the PC answered but nothing accepted the configured TCP port.
-- `Windows could not be authenticated — check the shared token matches on both sides`: the two apps derived different keys, so neither can read the other's frames. The tokens differ.
-- `Windows is unreachable from this Mac`: the failure occurred before Beamer or the firewall could receive a packet. Check Wi-Fi client isolation, the Windows network attachment, and whether the Mac can resolve the Windows address on the LAN.
-- `Windows did not answer the handshake — it is probably running an older Beamer; update it`, or `Windows receiver speaks Beamer protocol vN, this Mac vM — update both apps`: the two apps disagree on wire version. The version travels in cleartext at the very start of the connection (and an older Beamer that predates the encrypted handshake is recognised by its silence), so a mismatch produces this message rather than a hang or garbage. Windows shows the mirror-image status, "Mac app is an older Beamer version — update both apps". Update whichever side is behind.
-- `Windows stopped responding`: no ping or acknowledgement arrived for about two seconds, so Beamer gave up on the connection.
+Any combination can be on. On the Mac, shortcut and the right-hand edge are on to start with.
 
-Both statuses are now truthful within a few seconds of a real link failure, not just of the next action you take. Windows moves to "Waiting for your Mac" within about three seconds of the link actually dying (it enforces a 2.5-second read timeout per session, and the Mac pings at least once a second while idle, so silence past that window means the peer is gone). The Mac notices a dead link within about two seconds the same way and reverts input to itself; trying to double-tap into Windows while the link is down beeps and posts a macOS notification instead of silently doing nothing.
+- The notch has no pixels to light, so a push there draws on the notch itself. Beam, the default,
+  runs a comet of light round a small tab under the notch that brightens and speeds up with the
+  push. Island springs a black island out of the notch with a four-segment meter; with Reduce
+  Motion on it stays one size and fades with the push.
+- Only the outer boundary of the whole desktop counts, so an edge between two displays on the same
+  machine behaves as the system intends.
+- The pointer arrives where it left: 42% of the way down the Mac's right edge is 42% of the way
+  down the PC's left edge, on whichever monitor owns it.
+- Crossing never fires while a mouse button is held, because a drag that reaches the edge is a drag.
+- It suspends itself while a full-screen app has focus. Pause crossing in the Mac's menu bar puts it
+  away until you resume it or restart Beamer.
+- Only one machine's input is on the other at a time. While the Mac drives the PC, pushing the PC's
+  own mouse through the edge sends the Mac's input home and takes the PC's mouse across behind it.
+- Either machine's own switch, the menu item or the trigger key, sends the other's input home, so a
+  way back never depends on the edge alone.
+- Switching to a PC that is asleep sends wake-on-LAN. The PC's hardware address is read from the
+  Mac's ARP table after a successful connection, never typed.
 
-The Mac always fails open. A dropped connection, missing acknowledgement, crashed capture worker or full event queue immediately returns input to macOS. A watchdog runs for as long as a socket exists — not only while input is redirected — so a half-open connection is caught and the Mac auto-reconnects even if you never actually switched into Windows.
+Each machine's menu has one tick per direction: This Mac drives Windows and Windows drives this
+Mac on the Mac, Mac drives this PC and This PC drives the Mac in the Windows tray. Turning one off
+stops that direction only.
 
-## Keyboard mapping
+</details>
 
-Mac modifier keys map to Windows *semantically*, so the shortcuts your fingers already know keep working:
+<details>
+<summary><strong>Keys, buttons and media keys</strong></summary>
+
+Mac modifiers map to Windows by meaning, so the shortcuts your fingers know keep working. The
+Mac's Keyboard page can switch this to positional, where Cmd sends the Windows key.
 
 | Mac key | Sends on Windows |
-| --- | --- |
+|---|---|
 | Cmd | Ctrl |
 | Ctrl | Windows key |
 | Option | Alt |
 
-Cmd+C, Cmd+V, Cmd+Z and Cmd+T are copy, paste, undo and new tab on Windows, exactly as on the Mac. The Windows key moves to Ctrl, so Ctrl+E opens Explorer and Ctrl on its own opens the Start menu.
+So Cmd+C, Cmd+V, Cmd+Z and Cmd+T are copy, paste, undo and new tab, Ctrl+E opens Explorer and Ctrl
+on its own opens Start. The PC's keys arrive on the Mac the reverse way. Chords with Ctrl, Alt or
+Windows held are sent as real virtual-key presses, so they land on the right key for the active
+Windows keyboard layout. The `key_map` object in each app's config JSON can still override single
+keys.
 
-An existing install picks this up on first launch: a saved `config.json` still carrying the old positional map is treated as the old default and replaced. A `key_map` you have edited yourself is left alone, so the positional mapping is still available by setting `cmd` to `cmd` and `ctrl` to `ctrl` there.
+The trigger key is never forwarded. On the Mac it is recorded by pressing it, Right Option to start
+with; on the PC it is one of eight modifier and Menu keys, Right Ctrl to start with. Either can
+double-tap or hold.
 
-Chorded characters (Ctrl/Alt/Win held with a letter) are injected as real virtual-key presses on Windows rather than layout-independent Unicode, so shortcuts like Ctrl+Z land on the right key for the active Windows keyboard layout.
+The stays-here list is per machine, because a Mac keycode and a Windows virtual key are different
+numbers for the same key. It takes keys, the right, middle, back and forward mouse buttons, and on
+the Mac its media keys. A listed press stays on the machine it was pressed on while input is away;
+its release goes wherever its press went, so nothing is ever left held down on the far side. The
+trigger key cannot be added.
 
-Beamer cannot raise Ctrl+Alt+Del, and deliberately no longer tries. It is the Secure Attention Sequence, trapped by the kernel before any application sees it, so `SendInput` can never produce it; the one supported route, `SendSAS()`, requires the caller to be a Windows service, or to be manifested `uiAccess="true"` *and* Authenticode-signed *and* installed under `\Program Files\` or `\windows\system32\`. Beamer is none of those, so the call was always a silent no-op. Use the PC's own keyboard for that chord.
+The F7–F12 media row and the volume keys forward as play/pause, next, previous, mute and volume.
+On the Mac they arrive as system events rather than key events and are captured separately
+(`mac_app/media_keys.py`). Brightness and keyboard-backlight keys stay with macOS, since Windows has
+no equivalent.
 
-## Crossing
+Ctrl+Alt+Del is the Secure Attention Sequence, trapped by the kernel before any app sees it.
+`SendInput` cannot produce it, and `SendSAS()` needs a Windows service or a signed `uiAccess` app
+installed under Program Files, which Beamer is not.
 
-Crossing is the pointer route between the two machines. Push the pointer at the outer edge of the Mac desktop and it does not move — the push builds as pressure instead, the edge lights up, the trackpad ticks at each quarter, and once you have pushed far enough the boundary gives and input is on Windows. Pushing back through the far edge over there brings it home the same way — and pushing the PC's own pointer through that same far edge sends the PC's keyboard and mouse to the Mac, which is the same crossing walked from the other end.
+</details>
 
-The notch cannot light up: the display has no pixels there. So a push through the notch grows the notch itself instead. A black island springs out of it with a cyan rim, a four-segment meter and the percentage appear inside once it is deep enough, each trackpad tick nudges it, and it snaps back into the notch when you cross. With Reduce Motion on it stays one size and fades with the push.
+<details>
+<summary><strong>Gestures</strong></summary>
 
-The resistance is the point. An edge that switches machines the instant you touch it does so every time you overshoot a close button, which is why edge switching gets turned off in every tool that has it. The default is 120 points of push; set it to zero for switch-on-contact, or drag the slider and try the real edge before saving.
-
-There are four ways in and any combination can be on at once:
-
-| Method | Where it triggers |
-| --- | --- |
-| Shortcut | Double-tap the trigger key, or hold it, whichever you choose |
-| Edge | The whole of one outer edge of the Mac desktop |
-| Corner | An 8pt box in one named corner, needing a diagonal push |
-| Notch | The top edge, only within the notch's own width |
-
-Only the outer boundary of the whole Mac desktop counts, so an edge between two Mac displays still behaves as macOS intends. Crossing never fires while a mouse button is held, because a drag that reaches the edge is a drag. It suspends itself while a full-screen app has focus — a game whose edge teleports your pointer to another computer reads as broken — and there is a Pause crossing item in the menu bar for when you want it out of the way, which deliberately does not survive a restart.
-
-The pointer arrives where it left. Leaving the Mac's right edge 42% of the way down means arriving at the Windows left edge 42% of the way down it, on whichever monitor owns that edge. Without that it feels like a teleport rather than a monitor.
-
-Every setting lives on the Mac, in the control window: which ways in are on, which edge and corner, the trigger key and whether it double-taps or holds, the resistance, the haptics, the glow, and the modifier style. Windows is told the way home in the Mac's first frame and again on every switch, so it knows the border before either machine has crossed it. Its only local preferences are whether its own edge lights up and whether it sends its keyboard to the Mac at all.
-
-Only one machine owns the keyboard at a time. While the Mac is driving, the PC's outward edge is disarmed and the Mac's own tap ignores everything Beamer posts; while the PC is driving, the Mac passes every event through to itself untouched. Neither can push input back across the border it just arrived over.
-
-## Media keys
-
-The F7–F12 media row and the volume keys forward to Windows: play/pause, next, previous, mute, volume up and volume down. These do not arrive as ordinary key events on macOS — they are `NSSystemDefined` events, captured separately (see `mac_app/media_keys.py`). Brightness and keyboard-backlight keys share that event type and are deliberately left to macOS, since Windows has no equivalent.
-
-The `key_map` object in each app's config JSON can override individual key names if you want different behaviour (for example, swapping Cmd and Ctrl). Right Option always remains the double-tap switch trigger regardless of `key_map`, so it can never itself be forwarded as input — Windows' AltGr, which a physical PC keyboard reaches through its own right Alt key, isn't reachable from the Mac side.
-
-## Clipboard
-
-Text and images on the clipboard follow you across a switch: copying on the Mac and then double-tapping into Windows carries them over, and switching back the other way carries Windows' clipboard back to the Mac. A screenshot copied on the Mac pastes into Teams on Windows; a Snipping Tool grab pastes into Preview or Notes on the Mac. Where the source clipboard holds both an image and text (a file copied in Finder carries its name as text), both cross and the pasting app picks the one it wants, as it would from the source. Files themselves do not cross. Sync only happens at the moment of the switch, and the clipboard travels ahead of the switch itself, so it is capped to keep the switch prompt: 256KB for text and 8MB for an image as PNG (a full-screen grab of a 16" Retina display is about 3MB). Over the cap, that half is left alone rather than truncated and the other half still crosses. On the wire the image is PNG; the Windows app converts to and from the clipboard's own DIB format itself, using the Qt it already ships for the PNG codec, so there is no imaging library in the build.
-
-## Gestures
-
-Trackpad scrolling is smooth and supports horizontal motion on Windows, always.
-
-The system gestures — the ones that drive Mission Control, App Exposé, Spaces, Show desktop and Launchpad on the Mac — do the equivalent thing on Windows while input is redirected, and do nothing on the Mac in the meantime:
+Trackpad scrolling is smooth and horizontal scrolling works on Windows. While input is on the PC,
+the Mac's system gestures do the equivalent thing there and nothing on the Mac:
 
 | Mac gesture | On Windows |
-| --- | --- |
+|---|---|
 | Three or four fingers up (Mission Control) | Task View |
 | Three or four fingers down (App Exposé) | Show desktop |
 | Three or four fingers left or right (Spaces) | Switch virtual desktop, the same way round |
 | Thumb and three fingers spread (Show desktop) | Show desktop |
 | Thumb and three fingers pinched (Launchpad) | Start |
+| Two-finger pinch | Zoom (Ctrl+scroll) |
+| Two-finger swipe between pages | Back and forward (Alt+Left/Right) |
 
-Beamer classifies the gesture when it ends and sends one message; the Windows receiver replays it as a real swipe through a synthetic Precision Touchpad, so Windows' own Settings → Touchpad choices apply and Task View animates as it would under fingers. Where Windows refuses that device, the receiver presses the shortcut with the same default meaning instead (Win+Tab, Win+D, Win+Ctrl+Left/Right, Win). Direction is read from private macOS event fields measured on macOS 26; the table is keyed by macOS major version in `mac_app/gestures.py`, since macOS 27 is reported to flip the horizontal sign.
+The Mac classifies a system gesture when it ends and sends one message. The PC replays it as a real
+swipe through a synthetic Precision Touchpad, so Windows' own touchpad settings apply and Task View
+animates as it would under fingers. Where Windows refuses that device, it presses the shortcut with
+the same default meaning instead (Win+Tab, Win+D, Win+Ctrl+Left/Right, Win). Direction comes from
+private macOS event fields, keyed by macOS major version in `mac_app/gestures.py`, because the
+horizontal sign has flipped between releases.
 
-Two-finger pinch (Ctrl+scroll) and the two-finger swipe between pages (Alt+Left/Right) remain best-effort: the zoom event was never seen to reach the event tap, so they depend on the overlay panel under the pinned cursor receiving them, which no run has yet confirmed.
+</details>
 
-## Latency
+<details>
+<summary><strong>Clipboard</strong></summary>
 
-Traffic stays on the LAN, but if both machines are on Wi-Fi, every event is relayed through the access point — transmitted over the air twice (Mac to AP, then AP to Windows) instead of once. Plugging either machine into Ethernet removes one of those hops (or both, if you wire both machines). Where Wi-Fi is unavoidable, a 5GHz/6GHz network and disabling Wi-Fi power saving on the Windows adapter both help. On the software side, Beamer sends every event immediately (TCP_NODELAY, no Nagle buffering). Acknowledgements are prompt but batched: input is acked as soon as it lands, coalesced over 15ms so a 100Hz stream of mouse moves cannot double the packet count, with an idle heartbeat every 400ms so a dead link is still noticed quickly. The control window shows the measured round trip while input is on Windows.
+The clipboard moves at the moment of a switch, ahead of the switch itself: switching from the Mac
+carries the Mac's clipboard to the PC, and switching back carries the PC's to the Mac. Where it
+holds both an image and text, both cross and the pasting app picks. The caps keep the switch
+prompt: 256KB of text and an 8MB image as PNG. Over a cap, that half is left alone rather than
+truncated. The PC converts to and from the Windows clipboard's DIB format itself, using the Qt it
+already ships.
 
-## Switching a direction off
+</details>
 
-Each machine's menu has one tick per direction. On the Mac's menu-bar item they are This Mac drives Windows and Windows drives this Mac; in the Windows tray menu, Mac drives this PC and This PC drives the Mac, the same two switches the Overview page shows. Turning one off stops that direction only; the other carries on. Whichever machine the other is driving, its own switch — the menu item, or the trigger key — sends that input home, so a way back never depends on the return edge alone.
+<details>
+<summary><strong>Latency</strong></summary>
 
-## Development checks
+If both machines are on Wi-Fi, every event crosses the air twice, Mac to access point to PC.
+Ethernet on either machine removes a hop. Where Wi-Fi is unavoidable, 5GHz or 6GHz and turning off
+power saving on the PC's adapter both help.
+
+Beamer sends every event at once (TCP_NODELAY). Acknowledgements are coalesced over 15ms so a
+100Hz stream of moves cannot double the packet count, with an idle heartbeat every 400ms. The Mac's
+settings show the measured round trip while input is on the PC.
+
+</details>
+
+<details>
+<summary><strong>Security</strong></summary>
+
+Both apps derive a key from the shared token with HKDF-SHA256 and seal every frame with
+ChaCha20-Poly1305. The token is never sent. Pairing agrees a token over X25519, with each side
+proving it knows the six-digit code. What that does and does not protect against is in
+[SECURITY.md](SECURITY.md).
+
+</details>
+
+<details>
+<summary><strong>Windows specifics</strong></summary>
+
+The installer puts Beamer in `%LOCALAPPDATA%\Beamer` for the current user with a Start menu
+shortcut. Quit Beamer from the tray before installing a newer version over it; only one instance
+runs at a time.
+
+Beamer runs elevated (its exe carries a `requireAdministrator` manifest), because Windows silently
+drops input from a non-elevated app aimed at an elevated window such as an admin PowerShell. Start
+Beamer when you sign in, on Overview, writes and removes an elevated `Beamer` logon task; nothing
+else touches autostart.
+
+Beamer needs two inbound rules on Private networks: TCP 24820 for input and UDP 24821 for pairing,
+both below the range Windows and macOS hand out for themselves. The app adds them on its first
+elevated start. The Firewall page says in one sentence whether the Mac can get in and offers one
+button for whichever of three things usually stops it: the rule is missing (it adds it), Cancel was
+pressed on Windows' own "allow this app" prompt, which writes a block rule that beats any allow rule
+(it removes the block and adds the rule), or the network is classed as public (it marks the network
+private rather than opening the port on every public network).
+
+**The lock screen.** No elevation lets an app type there: it is the Winlogon secure desktop, which
+admits only SYSTEM. On a PC with the author's separate unlock credential provider installed (not
+part of this repository), switching to a locked PC signals that provider, which unlocks it in about
+four seconds; input sent meanwhile is dropped. Beamer only signals the provider and never holds a
+password. Without it, the Mac reports `Windows is locked — unlock it at the PC`.
+
+</details>
+
+<details>
+<summary><strong>Building from source</strong></summary>
+
+On the Mac, double-click `mac_app/Install-Beamer-Mac.command`. It builds a self-contained app,
+installs it at `/Applications/Beamer.app`, and leaves it closed so the permission prompts do not
+appear unexpectedly.
+
+On Windows, run `win_app\Install-Beamer.ps1` from an admin PowerShell. It builds and installs
+`%LOCALAPPDATA%\Beamer\Beamer.exe`, adds a Start menu shortcut and the two firewall rules. From a
+non-admin PowerShell it still installs but skips the rules, which the app adds on its first
+elevated start.
+
+Pairing is the easy path, not the only one: each Connection page still takes an address, port and
+shared token typed by hand, and they must match on both machines.
+
+</details>
+
+<details>
+<summary><strong>Development checks</strong></summary>
 
 From `mac_app`:
 
@@ -164,19 +341,36 @@ python -m unittest discover -s tests -v
 .\build_win_app.ps1
 ```
 
-The macOS build is signed with the same Developer ID identity as a release where the login keychain can reach it, so the privacy grants carry between local builds and releases, and ad-hoc otherwise (a build driven over SSH), under the hardened runtime either way. It is not a notarised release build.
+A local Mac build is signed with the release's Developer ID identity when the login keychain can
+reach it, so privacy grants carry between local builds and releases, and ad-hoc otherwise (over
+SSH), under the hardened runtime either way. It is not notarised.
 
-## Release builds
+Files shared by both apps (`receiver.py`, `return_edge.py`, `pairing.py`, `ignored.py`, `tokens.py`
+and others) are byte-identical copies, because each app bundles only what sits under it; a test
+fails if a pair drifts. `Beamer.svg` is the master of the mark, and `Beamer.ico`, `Beamer.png` and
+`Beamer.icns` are rendered from it.
 
-The version is set once, in `VERSION` at the repository root. Both apps read it for their menus, py2app writes it into the Mac bundle and Inno Setup into the Windows installer; the Mac build number is the commit count. To release: change `VERSION`, commit, then build each platform from that commit with one command. Both commands refuse uncommitted changes outside `docs/`, and neither uploads anything except the Mac's submissions to Apple's notary service. Both write to `docs/beamer-releases/<version>/` in the folder that contains the repository.
+</details>
 
-On the Mac, from `mac_app`, in a desktop login session (the keychain will not release a Developer ID identity over SSH):
+<details>
+<summary><strong>Release builds</strong></summary>
+
+The version lives once, in `VERSION` at the repository root; the Mac build number is the commit
+count. Change `VERSION`, commit, then build each platform from that commit. Both commands refuse
+uncommitted changes outside `docs/`, upload nothing except the Mac's notary submissions, and write
+to `docs/beamer-releases/<version>/` in the folder that contains the repository.
+
+On the Mac, from `mac_app`, in a desktop session (the keychain will not release a Developer ID
+identity over SSH):
 
 ```sh
 ./build_dmg.sh --release
 ```
 
-It signs every nested binary with the Developer ID Application identity in the login keychain, under the hardened runtime with a secure timestamp, checks the bundle still runs under that runtime, notarises and staples the app, puts it in a DMG that is signed, notarised and stapled in turn, and checks both with `stapler validate` and `spctl`. Notarisation authenticates with the App Store Connect API key named in `~/.appstoreconnect/key_id`. A rejected submission prints Apple's log and stops the build.
+It signs every nested binary with Developer ID under the hardened runtime with a secure timestamp,
+checks the bundle still runs, notarises and staples the app, then the DMG, and checks both with
+`stapler validate` and `spctl`. Notarisation uses the App Store Connect API key named in
+`~/.appstoreconnect/key_id`.
 
 On Windows, from `win_app`:
 
@@ -184,6 +378,15 @@ On Windows, from `win_app`:
 .\build_win_app.ps1 -Release
 ```
 
-It runs the Windows tests, builds `Beamer.exe`, and compiles `Beamer-Setup.iss` with Inno Setup 6 into `Beamer-Setup-<version>.exe`, then prints the commit it came from. The installer is not code-signed, so SmartScreen warns about it until it has a download history; it adds no firewall rules (the app's own firewall check offers the one-click repair) and leaves autostart unticked.
+It runs the tests, builds `Beamer.exe` and compiles `Beamer-Setup.iss` with Inno Setup 6 into
+`Beamer-Setup-<version>.exe`. The installer adds no firewall rules and leaves autostart off.
 
-Both apps draw with the tokens in `tokens.py`; `win_app/tokens.py` is a byte-identical copy, because PyInstaller only bundles what sits under the app, and a test fails if the two drift. `Beamer.svg` is the editable master of the mark, and `Beamer.ico`, `Beamer.png` and `Beamer.icns` are rendered from it.
+</details>
+
+## Licence and support
+
+GPL-3.0; see [LICENSE](LICENSE). Releases up to and including 1.2.0 were MIT.
+
+Beamer is free and made by one person. Issues are welcome and read, but there is no guarantee of a
+reply. Report security problems privately, as [SECURITY.md](SECURITY.md) describes. Home page:
+[kalkmancode.co.uk/beamer](https://kalkmancode.co.uk/beamer).

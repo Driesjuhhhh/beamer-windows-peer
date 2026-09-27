@@ -23,11 +23,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config as config_module
 import crossing
 import gestures
+import ignored_titles
 import notch_beam
 import previews
 from notch_beam import NotchBeam
 from notch_island import NotchIsland
 from bridge import _GestureEventView
+from key_codes import KEY_NAME_TO_CODE
 import link_state
 import login_item
 import pages
@@ -650,6 +652,27 @@ class EdgeGlow:
         self.visible = False
 
 
+BEAMER_SITE_URL = "https://kalkmancode.co.uk/beamer"
+
+
+def show_about_panel():
+    """The standard About panel, with a centred credits line linking to the project's page. The
+    version shown is Info.plist's own CFBundleShortVersionString, already the VERSION file's
+    contents (see setup.py) -- nothing to pass here for that. Activates the app first: without it,
+    a panel asked for from the menu-bar item alone can open behind everything else."""
+    AppKit.NSApp.activateIgnoringOtherApps_(True)
+    paragraph = AppKit.NSMutableParagraphStyle.alloc().init()
+    paragraph.setAlignment_(AppKit.NSTextAlignmentCenter)
+    credits = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+        "kalkmancode.co.uk/beamer",
+        {
+            AppKit.NSLinkAttributeName: AppKit.NSURL.URLWithString_(BEAMER_SITE_URL),
+            AppKit.NSParagraphStyleAttributeName: paragraph,
+        },
+    )
+    AppKit.NSApp.orderFrontStandardAboutPanelWithOptions_({AppKit.NSAboutPanelOptionCredits: credits})
+
+
 def install_main_menu(control_window):
     """rumps builds a status-bar menu and no main menu at all, and Beamer is not a status-bar-only
     app: it shows a real window with text fields in it. Cmd+Q is not built into AppKit — it is the
@@ -667,6 +690,8 @@ def install_main_menu(control_window):
 
     application_item = main_menu.addItemWithTitle_action_keyEquivalent_("Beamer", None, "")
     application_menu = AppKit.NSMenu.alloc().initWithTitle_("Beamer")
+    item(application_menu, "About Beamer", "showAbout:", "", target=control_window)
+    application_menu.addItem_(AppKit.NSMenuItem.separatorItem())
     item(application_menu, "Hide Beamer", "hide:", "h")
     item(
         application_menu,
@@ -777,7 +802,14 @@ class ControlWindow(AppKit.NSObject):
         content.layer().setBackgroundColor_(theme.colour("ground").CGColor())
 
         top = widgets.hairline()
-        self.sidebar = widgets.Sidebar(pages.PAGES, self._select_page)
+        self.sidebar = widgets.Sidebar(
+            pages.PAGES,
+            self._select_page,
+            # Two lines: one, at the sidebar's narrowest, cuts the address off.
+            footer_text=f"Beamer {VERSION}\nkalkmancode.co.uk/beamer",
+            footer_label="Open kalkmancode.co.uk/beamer",
+            on_footer=self._open_beamer_site,
+        )
         divider = widgets.box("rule")
         pane = widgets.stack(spacing=0)
         for view in (top, self.sidebar.view, divider, pane):
@@ -888,7 +920,16 @@ class ControlWindow(AppKit.NSObject):
         for name, scroll in self.pages.items():
             scroll.setHidden_(name != key)
         self.sidebar.select(key)
+        if key != "keyboard":
+            # Both recorders listen application-wide; left armed, they would take the first key
+            # typed on another page.
+            self.key_recorder.cancel()
+            self.ignored_recorder.cancel()
         self._run_previews()
+
+    @objc.python_method
+    def _open_beamer_site(self):
+        AppKit.NSWorkspace.sharedWorkspace().openURL_(AppKit.NSURL.URLWithString_(BEAMER_SITE_URL))
 
     @objc.python_method
     def _run_previews(self):
@@ -913,6 +954,8 @@ class ControlWindow(AppKit.NSObject):
         self.token_plain.setStringValue_(str(raw["auth_token"]))
         self._say_pairing("Choose a PC, then type the code it shows.")
         self.key_recorder.set_value(raw["trigger_key"])
+        self.ignored_entries = list(raw["ignored_inputs"])
+        self._render_ignored()
         self.style_select.value = raw["trigger_style"]
         self.double_tap_ruler.value = raw["double_tap_ms"]
         self.double_tap_numeral.set(str(raw["double_tap_ms"]))
@@ -968,6 +1011,7 @@ class ControlWindow(AppKit.NSObject):
             f"Top edge, {round(notch_range[1] - notch_range[0])} pt wide" if self.has_notch and notch_range else "This Mac has no notch"
         )
         self.method_boxes["shortcut"].set_detail(widgets.key_title(self.key_recorder.value))
+        self.ignored_recorder.set_trigger_code(KEY_NAME_TO_CODE.get(self.key_recorder.value))
         hold = self.style_select.value == "hold"
         self.double_tap_ruler.set_enabled(not hold)
         self.double_tap_head.setAlphaValue_(0.4 if hold else 1.0)
@@ -1064,6 +1108,7 @@ class ControlWindow(AppKit.NSObject):
 
     def windowWillClose_(self, _notification):
         self.key_recorder.cancel()
+        self.ignored_recorder.cancel()
         if self.previews is not None:
             self.previews.stop()
 
@@ -1181,6 +1226,7 @@ class ControlWindow(AppKit.NSObject):
     @objc.python_method
     def _keyboard_page(self, body):
         widgets.add(body, self._shortcut_module().view)
+        widgets.add(body, self._ignored_module().view)
         widgets.add(body, self._modifier_module().view)
 
     @objc.python_method
@@ -1319,6 +1365,72 @@ class ControlWindow(AppKit.NSObject):
         self.style_hint = widgets.note()
         module.add(self.style_hint.view)
         return module
+
+    @objc.python_method
+    def _ignored_module(self):
+        module = widgets.Module()
+        module.add(widgets.eyebrow("Stays on this Mac"))
+        module.add(widgets.note(
+            "These keys and buttons keep working on this Mac while its input is on Windows: a "
+            "mouse's back button for this Mac's browser, say, or a volume key for its speakers."
+        ).view)
+        self.ignored_entries = []
+        self.ignored_list = widgets.stack(spacing=6)
+        module.add(self.ignored_list)
+        self.ignored_empty = widgets.note("Nothing yet. Every key and button goes to Windows while it has input.")
+        module.add(self.ignored_empty.view)
+        self.ignored_recorder = widgets.IgnoredRecorder(
+            KEY_NAME_TO_CODE.get(self.key_recorder.value), on_recorded=self._add_ignored
+        )
+        module.add(self.ignored_recorder.view)
+        self.ignored_status = widgets.note()
+        module.add(self.ignored_status.view)
+        self._render_ignored()
+        return module
+
+    @objc.python_method
+    def _render_ignored(self):
+        for view in list(self.ignored_list.arrangedSubviews()):
+            self.ignored_list.removeArrangedSubview_(view)
+            view.removeFromSuperview()
+        for entry in self.ignored_entries:
+            # One quiet row per entry, as on Windows: the name, and a small Remove that does not
+            # outweigh it.
+            title = ignored_titles.entry_title(entry)
+            chip = widgets.box("well", "rule", theme.RADIUS["field"])
+            name = widgets.Label(title, theme.TYPE["small"], 600, mono=True)
+            remove = widgets.pressable(lambda entry=entry: self._remove_ignored(entry), radius=theme.RADIUS["field"])
+            remove.setAccessibilityLabel_(f"Remove {title}")
+            remove_word = widgets.Label("Remove", theme.TYPE["small"], ink="ink_3")
+            remove.addSubview_(remove_word.view)
+            widgets.pin(remove_word.view, remove, (4, 8, 4, 8))
+            line = widgets.stack(vertical=False, spacing=10)
+            line.addArrangedSubview_(name.view)
+            line.addArrangedSubview_(remove)
+            widgets.hug(name.view, AppKit.NSLayoutPriorityDefaultLow)
+            chip.addSubview_(line)
+            widgets.pin(line, chip, (5, 12, 5, 4))
+            widgets.add(self.ignored_list, chip)
+        self.ignored_empty.view.setHidden_(bool(self.ignored_entries))
+
+    @objc.python_method
+    def _add_ignored(self, entry):
+        if entry is None:
+            self.ignored_status.set("That key is the shortcut; it always stays with Beamer.")
+            return
+        if entry in self.ignored_entries:
+            return
+        self.ignored_entries.append(entry)
+        self.ignored_status.set("")
+        self._render_ignored()
+        self._changed()
+
+    @objc.python_method
+    def _remove_ignored(self, entry):
+        self.ignored_entries.remove(entry)
+        self.ignored_status.set("")
+        self._render_ignored()
+        self._changed()
 
     @objc.python_method
     def _on_screen_module(self):
@@ -1623,6 +1735,7 @@ class ControlWindow(AppKit.NSObject):
         raw = config_to_raw(self.controller.cfg)
         try:
             raw["trigger_key"] = self.key_recorder.value
+            raw["ignored_inputs"] = list(self.ignored_entries)
             raw["trigger_style"] = self.style_select.value
             raw["double_tap_ms"] = self.double_tap_ruler.value
             if self.modifier_select.value in config_module.KEY_MAP_STYLES:
@@ -1690,6 +1803,9 @@ class ControlWindow(AppKit.NSObject):
 
     def quitApp_(self, _sender):
         self.quit_handler()
+
+    def showAbout_(self, _sender):
+        show_about_panel()
 
     def requestAccessibility_(self, _sender):
         ApplicationServices.AXIsProcessTrustedWithOptions(
@@ -2090,6 +2206,7 @@ class TrayApp(rumps.App):
                 rumps.MenuItem("Settings…", callback=self.open_window),
                 rumps.MenuItem("Reload configuration", callback=self.reload_config),
                 rumps.separator,
+                rumps.MenuItem("About Beamer", callback=self.show_about),
                 rumps.MenuItem("Quit Beamer", callback=self.quit_app),
             ],
             quit_button=None,
@@ -2192,12 +2309,17 @@ class TrayApp(rumps.App):
     def reload_config(self, _sender):
         """Re-reads config.json, for the times it was edited outside the window."""
         try:
-            self.controller.update_config(self.settings_store.load())
+            cfg = self.settings_store.load()
         except SettingsError as exc:
             self.logger.warning("configuration not reloaded: %s", exc)
             self.notify_user("Configuration not reloaded", str(exc))
             return
+        self.control_window._load(config_to_raw(cfg))
+        self.controller.update_config(cfg)
         self.notify_user("Configuration reloaded", "Beamer is using the config on disk.")
+
+    def show_about(self, _sender):
+        show_about_panel()
 
     def measure_notch(self):
         """Re-read on every tick so plugging a display in above the MacBook, which moves the

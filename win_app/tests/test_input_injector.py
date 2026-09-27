@@ -370,6 +370,19 @@ class InjectScrollDispatchTests(unittest.TestCase):
         self.assertAlmostEqual(input_injector._scroll_accum[0], 0.1 * WHEEL_UNITS_PER_PIXEL, places=6)
 
 
+class InjectSideButtonTests(unittest.TestCase):
+    def tearDown(self):
+        input_injector._buttons_down.clear()
+
+    def test_back_and_forward_are_x_buttons_one_and_two(self):
+        with mock.patch.object(input_injector, "_send_input") as fake_send:
+            input_injector.inject_mouse_button("back", True)
+            input_injector.inject_mouse_button("forward", False)
+        sent = [call.args[0].union.mi for call in fake_send.call_args_list]
+        self.assertEqual((sent[0].dwFlags, sent[0].mouseData), (input_injector.MOUSEEVENTF_XDOWN, 1))
+        self.assertEqual((sent[1].dwFlags, sent[1].mouseData), (input_injector.MOUSEEVENTF_XUP, 2))
+
+
 if __name__ == "__main__":
     unittest.main()
 

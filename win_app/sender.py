@@ -28,6 +28,7 @@ import threading
 import time
 from typing import Callable, Optional
 
+import ignored
 import protocol
 import return_edge
 
@@ -169,6 +170,7 @@ class MacSender:
         # Keys whose down-stroke went to the Mac and whose release has not: a
         # dict, not a set, only so the hook thread's pop() stays one operation.
         self._keys_down: dict = {}
+        self._ignore_gate = ignored.Gate()
         self._last_sent_seq = 0
         self._last_ack_seq = -1
         self._last_ack_at = 0.0
@@ -253,6 +255,7 @@ class MacSender:
         with self._config_lock:
             previous = self._config
             self._config = config
+        self._ignore_gate.configure(getattr(config, "ignored_inputs", None) or ())
         edge = getattr(config, "mac_return_edge", "") or None
         self._edge = edge if edge in return_edge.EDGES else None
         self._rearm_edge()
@@ -287,7 +290,7 @@ class MacSender:
         last = max(self._last_ack_at, self._connected_at)
         return (self._clock() - last) <= ACK_TIMEOUT_SECONDS
 
-    def on_key(self, name: str, down: bool) -> bool:
+    def on_key(self, name: str, down: bool, vk: Optional[int] = None) -> bool:
         if not self.redirecting:
             # A key that went down on the Mac and is still held after input
             # came home: the Mac was sent its release when input left, and
@@ -300,6 +303,8 @@ class MacSender:
             return True
         if not self._link_live():
             self._force_local("the link to the Mac went quiet")
+            return False
+        if vk is not None and self._ignore_gate.keeps(ignored.key(vk), down):
             return False
         if down:
             self._keys_down[name] = True
@@ -343,9 +348,11 @@ class MacSender:
         self._press_edge(int(dx), int(dy))
 
     def _send_mouse(self, capture_win, message, mouse_data) -> bool:
-        button = capture_win.BUTTON_MESSAGES.get(message)
+        button = capture_win.button_of(message, mouse_data)
         if button is not None:
             name, down = button
+            if self._ignore_gate.keeps(ignored.button(name), down):
+                return False
             self._enqueue(
                 {"type": protocol.MSG_MOUSEDOWN if down else protocol.MSG_MOUSEUP, "data": {"button": name}}
             )
@@ -356,8 +363,8 @@ class MacSender:
         if message == capture_win.WM_MOUSEHWHEEL:
             self._enqueue(protocol.scroll_msg(0.0, capture_win.wheel_notches(mouse_data), "line"))
             return True
-        # An X button, or anything else the Mac has no name for: left to
-        # Windows rather than dropped, so a thumb button still works here.
+        # Anything else the Mac has no name for: left to Windows rather than
+        # dropped.
         return False
 
     def _press_edge(self, dx, dy) -> None:
@@ -368,8 +375,14 @@ class MacSender:
         Nothing is held here, unlike the receiver's side of the same model:
         Windows has already stopped the cursor at the edge of the desktop, so
         the hold is the screen's own. Only the pressure is ours to measure,
-        and only a breakthrough acts."""
-        if self._receiving or not self.connected:
+        and only a breakthrough acts.
+
+        It runs while the Mac is driving this PC too. Every move the Mac makes
+        here carries INJECTED_MARK and never arrives, so what does is this
+        PC's own mouse, and its push out means the pointer is going back to
+        the Mac with this mouse behind it (27-09-2026: it was ignored, and only
+        the Mac's trackpad could take the pointer back)."""
+        if not self.connected:
             return
         try:
             desktop = self._desktop_module()
@@ -391,6 +404,15 @@ class MacSender:
             return
         self._notify_pressure(model.edge, outcome.pressure, outcome.action == return_edge.CROSS)
         if outcome.action == return_edge.CROSS:
+            if self._receiving:
+                # The Mac's input goes home first, over its own link; its
+                # focus back to the Mac clears receiving here too, later, and
+                # finds it already cleared.
+                send_home = self.send_peer_home
+                if send_home is None or not send_home():
+                    LOGGER.warning("cannot cross: the Mac is driving this PC and cannot be reached")
+                    return
+                self._receiving = False
             # The model names the edge on the far side, not the one just left:
             # it is the same border, read from the other end.
             self.set_redirecting(True, arrival_edge=outcome.edge, offset=outcome.offset)
@@ -438,6 +460,7 @@ class MacSender:
             # focus goes home, marked to pass the gate that has just closed.
             # The entries stay, so the physical releases here are swallowed.
             self.redirecting = False
+            self._ignore_gate.reset()
             for name in list(self._keys_down):
                 self._enqueue_control({"type": protocol.MSG_KEYUP, "data": {"key": name}, _RELEASE_MARK: True})
             self._pin_point = None
@@ -759,6 +782,13 @@ class MacSender:
                 LOGGER.exception("Redirect callback failed")
 
     def _connection_failed(self, reason, expected_socket=None) -> None:
+        with self._socket_lock:
+            stale = expected_socket is not None and self._sock is not expected_socket
+        if stale:
+            # A deliberate stop or a reconnect already dropped this socket --
+            # closing it out from under a worker mid-recv/-send raises an
+            # OSError of its own, which is not a connection failure.
+            return
         self._force_local(reason)
         self._set_status(reason)
         self._drop_connection(expected_socket)

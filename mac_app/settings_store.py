@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import config as config_module
+import ignored
 import protocol
 
 from crossing import CORNERS, EDGES, GLOW_COLOURS, GLOW_STYLES, HAPTIC_FEELS, HAPTIC_STEPS, METHODS, NOTCH_STYLES
@@ -62,6 +63,7 @@ def editable_default_config():
         mac_address="",
         send_to_windows=True,
         allow_windows_to_drive=True,
+        ignored_inputs=[],
     )
 
 
@@ -83,6 +85,7 @@ def config_to_raw(cfg):
         "mac_address": cfg.mac_address,
         "send_to_windows": cfg.send_to_windows,
         "allow_windows_to_drive": cfg.allow_windows_to_drive,
+        "ignored_inputs": list(cfg.ignored_inputs),
     }
 
 
@@ -200,5 +203,9 @@ class SettingsStore:
         for name in ("haptics", "glow", "block_while_dragging"):
             if not isinstance(crossing[name], bool):
                 raise SettingsError(f"crossing.{name} must be true or false")
+        try:
+            ignored.validate(cfg.ignored_inputs)
+        except ValueError as exc:
+            raise SettingsError(str(exc)) from exc
         if cfg.mac_address and parse_mac(cfg.mac_address) is None:
             raise SettingsError("mac_address must be six hex pairs, such as 02:1A:2B:3C:0D:4E")

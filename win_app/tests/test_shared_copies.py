@@ -19,8 +19,8 @@ import unittest
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_TESTS_DIR))
 
-SHARED_MODULES = ("protocol.py", "receiver.py", "return_edge.py")
-SHARED_TESTS = ("test_shared_copies.py",)
+SHARED_MODULES = ("ignored.py", "protocol.py", "receiver.py", "return_edge.py")
+SHARED_TESTS = ("test_ignored.py", "test_shared_copies.py")
 
 
 def _digest(path):

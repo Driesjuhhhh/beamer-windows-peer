@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import ignored
 import protocol
 
 
@@ -29,6 +30,19 @@ TRIGGER_KEYS = {
     "shift_r": "Right Shift",
     "menu": "Menu",
 }
+# The virtual key each trigger arrives as, so the ignored list can refuse the trigger.
+TRIGGER_VKS = {
+    "cmd_r": 0xA3,
+    "cmd": 0xA2,
+    "alt_r": 0xA5,
+    "alt": 0xA4,
+    "ctrl_r": 0x5C,
+    "ctrl": 0x5B,
+    "shift_r": 0xA1,
+    "menu": 0x5D,
+}
+
+
 class ConfigError(Exception):
     pass
 
@@ -72,6 +86,8 @@ class Config:
     # own number, above: one slider for each direction, because the hand does
     # not feel a trackpad and a mouse the same way.
     mac_resistance_px: int = 120
+    # Keys and buttons that stay on this PC while its input is on the Mac; see ignored.py.
+    ignored_inputs: list = field(default_factory=list)
 
 
 def migrated_port(value) -> int:
@@ -181,6 +197,10 @@ def validate_config(config: Config) -> None:
         raise ConfigError("mac_host must be text")
     if config.mac_return_edge not in ("",) + EDGES:
         raise ConfigError("mac_return_edge must be an edge name, or empty")
+    try:
+        ignored.validate(config.ignored_inputs)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def config_from_dict(raw: dict) -> Config:
@@ -212,6 +232,7 @@ def config_from_dict(raw: dict) -> Config:
             mac_return_edge=raw.get("mac_return_edge", "") or "",
             arrangement_set_at=int(raw.get("arrangement_set_at", 0)),
             mac_resistance_px=int(raw.get("mac_resistance_px", 120)),
+            ignored_inputs=raw.get("ignored_inputs", []),
         )
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"config.json contains an invalid value: {exc}") from exc
@@ -263,6 +284,7 @@ def config_to_dict(config: Config) -> dict:
         "mac_return_edge": config.mac_return_edge,
         "arrangement_set_at": int(config.arrangement_set_at),
         "mac_resistance_px": int(config.mac_resistance_px),
+        "ignored_inputs": list(config.ignored_inputs),
     }
 
 
