@@ -1,6 +1,6 @@
 """The files both apps share are kept byte-identical, not merely similar.
 
-`ignored.py`, `protocol.py`, `receiver.py`, `return_edge.py` and `wol.py` each exist once in mac_app
+`ignored.py`, `pairing.py`, `protocol.py`, `receiver.py`, `return_edge.py` and `wol.py` each exist once in mac_app
 and once in win_app because neither app can import across the other's
 directory -- both are packaged as self-contained bundles. Everything
 platform-shaped in them is injected at construction instead, so there is no
@@ -19,7 +19,7 @@ import unittest
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_TESTS_DIR))
 
-SHARED_MODULES = ("ignored.py", "protocol.py", "receiver.py", "return_edge.py", "wol.py")
+SHARED_MODULES = ("ignored.py", "pairing.py", "protocol.py", "receiver.py", "return_edge.py", "wol.py")
 SHARED_TESTS = ("test_ignored.py", "test_shared_copies.py")
 
 
@@ -30,8 +30,8 @@ def _digest(path):
 
 class SharedCopyTests(unittest.TestCase):
     def _assert_identical(self, mac_path, win_path, name):
-        if not os.path.isfile(mac_path) or not os.path.isfile(win_path):
-            self.skipTest(f"{name} is missing from one side; nothing to compare")
+        for path in (mac_path, win_path):
+            self.assertTrue(os.path.isfile(path), f"{name} is missing from {os.path.dirname(path)}")
         self.assertEqual(
             _digest(mac_path),
             _digest(win_path),

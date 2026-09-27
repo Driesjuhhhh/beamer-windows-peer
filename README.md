@@ -20,20 +20,24 @@ Free, with no account. Every installer is on the [releases page](https://github.
 
 | Platform | Get it | Notes |
 |---|---|---|
-| macOS 13 or later | `Beamer-<version>.dmg` | Signed and notarised by Apple |
+| macOS 13 or later, Apple silicon | `Beamer-<version>.dmg` | Signed and notarised by Apple. Not for Intel Macs yet |
 | Windows 10 and 11 | `Beamer-Setup-<version>.exe` | Not code-signed; see step 1 below |
 | Windows, through winget | `winget install KalkmanCode.Beamer` | The same installer, without the warning |
 
 ## Quick start
 
 1. **Install on both machines.** On the Mac, drag Beamer to Applications, open it, and press the
-   two Grant buttons on the Permissions page (Accessibility, then Input Monitoring). On Windows,
+   two Grant buttons on the Permissions page (Accessibility, then Input Monitoring). Then quit
+   Beamer from its menu bar icon and open it again: macOS only passes keys to an app started after
+   the grant, so until then the pointer crosses but the keyboard does not. On Windows,
    run the installer. It is not code-signed, because a certificate costs money and Beamer is free,
    so Windows says "Windows protected your PC" the first time: choose More info, then Run anyway.
    winget does not show that warning. Beamer on Windows runs as administrator, so expect one UAC
    prompt when you open it.
 2. **Pair them.** On the PC, press Pair a Mac; a six-digit code appears. On the Mac, open the
    Pairing page, choose the PC from the list and type the code. It lasts a minute and works once.
+   If the PC never appears in the list, as on guest Wi-Fi or across a VPN, type the PC's address
+   on the Mac's Connection page and the same token on both machines' Connection pages instead.
 3. **Cross.** Push the Mac's pointer off the right-hand edge of its screen, or double-tap Right
    Option, and the Mac's keyboard and trackpad are on the PC. Push back through the PC's left edge,
    or double-tap again, to come home. The PC's own keyboard and mouse go the other way: push
@@ -108,6 +112,10 @@ step, so the border is always the same one seen from both ends.
   keyboard there.
 - **Files do not cross**, only text and images, up to 256KB of text and an 8MB image.
 - **AltGr is out of reach from the Mac.**
+- **Layouts that move letters, such as AZERTY and QWERTZ, are not handled yet.** Shortcuts sent
+  from the Mac, and letters typed from the PC onto the Mac, follow US key positions, and a dead key
+  typed on the PC does not cross. US and UK layouts are unaffected.
+- **Intel Macs are not supported yet.** The Mac app is built for Apple silicon only.
 - **The Windows installer is unsigned.** SmartScreen warns until it has a download history; winget
   avoids it.
 - **macOS 27 beta 4 could block a signed app's local-network access** even when Terminal could
