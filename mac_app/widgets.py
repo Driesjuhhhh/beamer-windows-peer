@@ -16,7 +16,7 @@ import objc
 
 import media_keys
 import theme
-from ignored_titles import recorded_entry
+from ignored_titles import is_modifier_release, recorded_entry
 from key_codes import KEY_NAME_TO_CODE, SPECIAL_KEY_NAMES, key_title
 
 
@@ -1096,6 +1096,8 @@ class IgnoredRecorder:
         elif event_type == AppKit.NSEventTypeOtherMouseDown:
             entry = recorded_entry("other", int(event.buttonNumber()), self.trigger_code)
         else:
+            if event_type == AppKit.NSEventTypeFlagsChanged and is_modifier_release(event.keyCode(), event.modifierFlags()):
+                return event
             entry = recorded_entry("key", int(event.keyCode()), self.trigger_code)
         self._stop()
         if self.on_recorded is not None:
@@ -1279,7 +1281,9 @@ class Sidebar:
             footer.setAccessibilityLabel_(footer_label or footer_text)
             footer_label_view = Label(footer_text, theme.TYPE["small"], ink="ink_3", wrap=True)
             footer.addSubview_(footer_label_view.view)
-            pin(footer_label_view.view, footer, (8, 16, 8, 14))
+            # A slim right inset, with nothing beside the text: the address is 144pt of a 180pt
+            # sidebar and wrapped onto a third line at the default window width at 14.
+            pin(footer_label_view.view, footer, (8, 16, 8, 4))
             self.view.addSubview_(footer)
             AppKit.NSLayoutConstraint.activateConstraints_([
                 footer.leadingAnchor().constraintEqualToAnchor_(self.view.leadingAnchor()),

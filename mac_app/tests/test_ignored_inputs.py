@@ -74,6 +74,26 @@ class TapTests(unittest.TestCase):
             (protocol.MSG_MOUSEUP, {"button": "forward"}),
         ])
 
+    def test_a_button_with_no_wire_name_stays_on_this_mac(self):
+        # Button 6 was swallowed while redirecting: sent nowhere, and kept from this Mac too.
+        self.configure([])
+        down, up = other_button(5), other_button(5)
+        self.assertIs(self.tap(FakeQuartz.kCGEventOtherMouseDown, down), down)
+        self.assertIs(self.tap(FakeQuartz.kCGEventOtherMouseUp, up), up)
+        self.assertEqual(self.sent(), [])
+
+    def test_caps_lock_listed_mid_session_stays_here_from_its_next_toggle(self):
+        # Each toggle is one FlagsChanged the translator reads as down; the first went across and
+        # pinned its route until input came home.
+        self.configure([])
+        toggle_on = {FakeQuartz.kCGKeyboardEventKeycode: 0x39, "flags": FakeQuartz.kCGEventFlagMaskAlphaShift}
+        self.assertIsNone(self.tap(FakeQuartz.kCGEventFlagsChanged, toggle_on))
+        self.assertEqual(len(self.sent()), 2)
+        self.configure([ignored.key(0x39)])
+        toggle_off = {FakeQuartz.kCGKeyboardEventKeycode: 0x39, "flags": 0}
+        self.assertIs(self.tap(FakeQuartz.kCGEventFlagsChanged, toggle_off), toggle_off)
+        self.assertEqual(self.sent(), [])
+
     def test_an_ignored_button_stays_on_this_mac(self):
         down, up = other_button(3), other_button(3)
         self.assertIs(self.tap(FakeQuartz.kCGEventOtherMouseDown, down), down)

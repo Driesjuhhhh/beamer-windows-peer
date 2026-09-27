@@ -654,8 +654,14 @@ class WindowsApplication(QWidget):
         self._set_ignored([candidate for candidate in self._config.ignored_inputs if candidate != entry])
 
     def _set_ignored(self, entries: list) -> None:
+        previous = self._config.ignored_inputs
         self._config.ignored_inputs = entries
-        self._persist()
+        if not self._persist():
+            # A list the file refuses, past ignored.MAX_ENTRIES, or a disk that would not take it:
+            # the running app keeps what is saved, so the list shown is the one the next start uses.
+            self._config.ignored_inputs = previous
+            self._show_ignored(list(previous), "That could not be saved, so the list is unchanged.")
+            return
         self.sender.update_config(self._config)
         self._show_ignored(entries)
 

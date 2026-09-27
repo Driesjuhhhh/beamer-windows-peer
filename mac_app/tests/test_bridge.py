@@ -16,6 +16,7 @@ from bridge import (
     ACK_TIMEOUT_SECONDS,
     AUTH_FAILED_STATUS,
     CONNECT_TIMEOUT_SECONDS,
+    CROSSING_RETRY_SECONDS,
     OLD_RECEIVER_STATUS,
     PING_INTERVAL_SECONDS,
     ROUND_TRIP_MAX_AGE_SECONDS,
@@ -1801,6 +1802,52 @@ class CrossingWiringTests(unittest.TestCase):
         self.assertEqual(kinds[-1], "cross")
         self.assertEqual(kinds.count("tick"), 3)
 
+    def test_this_macs_own_push_while_windows_drives_sends_the_pc_home_and_crosses(self):
+        # The Mac half of 2f45c00: this Mac's trackpad could not push back while the PC drove it.
+        sent_home = []
+        self.controller.receiving = True
+        self.controller.send_peer_home = lambda: sent_home.append(True) or True
+        _event, returned = self._push(10)
+        self.assertIsNone(returned)
+        self.assertEqual(sent_home, [True])
+        self.assertFalse(self.controller.receiving)
+        self.assertTrue(self.controller.redirecting)
+        focus = [m for m in self._sent() if m["type"] == protocol.MSG_FOCUS]
+        self.assertEqual(focus[0]["data"]["target"], "windows")
+
+    def test_the_pcs_own_moves_never_push_while_it_drives(self):
+        sent_home = []
+        self.controller.receiving = True
+        self.controller.send_peer_home = lambda: sent_home.append(True) or True
+        for _ in range(10):
+            event = {
+                "location": (1727.0, 558.0),
+                FakeQuartz.kCGMouseEventDeltaX: 30,
+                FakeQuartz.kCGMouseEventDeltaY: 0,
+                FakeQuartz.kCGEventSourceUserData: INJECTED_MARK,
+            }
+            self.assertIs(self.controller._event_tap_callback(None, FakeQuartz.kCGEventMouseMoved, event, None), event)
+        self.assertEqual(sent_home, [])
+        self.assertTrue(self.controller.receiving)
+        self.assertEqual(FakeQuartz.warp_calls, [])
+
+    def test_a_click_resets_this_macs_push_while_windows_drives(self):
+        self.controller.receiving = True
+        self.controller.send_peer_home = lambda: True
+        self._push(3)
+        self.assertGreater(self.controller.crossing.pressure, 0)
+        event = {"location": (1727.0, 558.0)}
+        self.assertIs(self.controller._event_tap_callback(None, FakeQuartz.kCGEventLeftMouseDown, event, None), event)
+        self.assertEqual(self.controller.crossing.pressure, 0)
+
+    def test_no_crossing_while_windows_drives_and_cannot_be_reached(self):
+        self.controller.receiving = True
+        self.controller.send_peer_home = lambda: False
+        event, returned = self._push(10)
+        self.assertIs(returned, event)
+        self.assertTrue(self.controller.receiving)
+        self.assertFalse(self.controller.redirecting)
+
     def test_no_crossing_while_disconnected(self):
         self.controller.sock = None
         event, returned = self._push(10)
@@ -1838,6 +1885,18 @@ class CrossingWiringTests(unittest.TestCase):
         self.assertIs(returned, event)
         self.controller.update_config(crossing_config())
         self.assertFalse(self.controller._crossing_failed)
+
+    def test_a_passing_failure_in_the_crossing_path_heals_by_itself(self):
+        self.controller.desktop_bounds = lambda: (_ for _ in ()).throw(RuntimeError("no displays"))
+        self.controller._bounds_cache = None
+        self._move(1727.0, 558.0, 30)
+        self.assertTrue(self.controller._crossing_failed)
+        self.controller.desktop_bounds = lambda: self.BOUNDS
+        self.controller._bounds_cache = None
+        self.clock.value += CROSSING_RETRY_SECONDS
+        _event, returned = self._push(10)
+        self.assertIsNone(returned)
+        self.assertTrue(self.controller.redirecting)
 
     def test_applying_settings_keeps_the_link(self):
         sock = self.controller.sock
@@ -1916,6 +1975,28 @@ class CrossingWiringTests(unittest.TestCase):
 
         controller = KVMController(crossing_config(), logger=quiet_logger(), quartz=DisplayQuartz, clock=self.clock)
         self.assertEqual(controller._default_desktop_bounds(), (0.0, -300.0, 3648.0, 1117.0))
+
+    def test_a_sleeping_display_still_bounds_the_desktop(self):
+        # 27-09-2026: the active list is empty while the display sleeps; the first push after
+        # waking raised and turned crossing off until settings were next saved.
+        class SleepingQuartz(FakeQuartz):
+            @staticmethod
+            def CGGetActiveDisplayList(limit, displays, count):
+                return 0, (), 0
+
+            @staticmethod
+            def CGGetOnlineDisplayList(limit, displays, count):
+                return 0, [1], 1
+
+            @staticmethod
+            def CGDisplayBounds(display):
+                return types.SimpleNamespace(
+                    origin=types.SimpleNamespace(x=0.0, y=0.0),
+                    size=types.SimpleNamespace(width=1728.0, height=1117.0),
+                )
+
+        controller = KVMController(crossing_config(), logger=quiet_logger(), quartz=SleepingQuartz, clock=self.clock)
+        self.assertEqual(controller._default_desktop_bounds(), (0.0, 0.0, 1728.0, 1117.0))
 
     def test_paused_crossing_leaves_the_edge_alone_while_the_shortcut_still_switches(self):
         self.controller.crossing_paused = True

@@ -156,19 +156,21 @@ VK_CONTROL_LEFT, VK_CONTROL_RIGHT = 0xA2, 0xA3
 VK_MENU_LEFT, VK_MENU_RIGHT = 0xA4, 0xA5
 _RIGHT_SHIFT_SCAN = 0x36
 _EXTENDED_SCAN = 0x100
+_EXTENDED_PREFIX = 0xE000
 
 
 def hook_vk(vk: int, scan: int) -> int:
     """The virtual key the low-level hook reports for a key a window saw as `vk` and `scan`. A
-    window is told only Shift, Ctrl or Alt; the hook always knows which side. `scan` carries the
-    extended-key bit at 0x100, which is how Qt reports it, and is what marks the right Ctrl and
-    the right Alt."""
+    window is told only Shift, Ctrl or Alt; the hook always knows which side. An extended key is
+    what marks the right Ctrl and the right Alt: Qt 6 reports one with an 0xE0 prefix (0xE01D is
+    the right Ctrl, proved on the rig 27-09-2026), and the extended bit at 0x100 is read too."""
+    extended = bool(scan & _EXTENDED_SCAN) or scan & 0xFF00 == _EXTENDED_PREFIX
     if vk == 0x10:
         return VK_SHIFT_RIGHT if scan & 0xFF == _RIGHT_SHIFT_SCAN else VK_SHIFT_LEFT
     if vk == 0x11:
-        return VK_CONTROL_RIGHT if scan & _EXTENDED_SCAN else VK_CONTROL_LEFT
+        return VK_CONTROL_RIGHT if extended else VK_CONTROL_LEFT
     if vk == 0x12:
-        return VK_MENU_RIGHT if scan & _EXTENDED_SCAN else VK_MENU_LEFT
+        return VK_MENU_RIGHT if extended else VK_MENU_LEFT
     return vk
 
 # Windows virtual keys to the wire's key names, which are Mac-shaped: the

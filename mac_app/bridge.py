@@ -15,6 +15,7 @@ import Quartz
 
 import clipboard_mac
 import crossing
+import desktop_mac
 from input_injector_mac import INJECTED_MARK
 import gestures
 import ignored
@@ -48,6 +49,7 @@ SSH_FALLBACK_HOST = "127.0.0.1"
 SSH_FALLBACK_PORT = 24822
 PING_INTERVAL_SECONDS = 1.0
 DESKTOP_BOUNDS_MAX_AGE_SECONDS = 1.0
+CROSSING_RETRY_SECONDS = 30.0
 ROUND_TRIP_SAMPLES = 8
 ROUND_TRIP_MAX_AGE_SECONDS = 5.0
 # A receiver that accepts the TCP connection but never sends a preamble is, in practice, one
@@ -128,6 +130,7 @@ NX_DEVICE_MODIFIER_BITS = {
     0x3D: 0x0040,
     0x3E: 0x2000,
 }
+CAPS_LOCK_KEY_CODE = 0x39
 # Command, Option and Control, left and right. Shift and caps lock are
 # excluded on purpose -- see _unicode_character.
 CHORD_MODIFIER_KEY_CODES = frozenset({0x36, 0x37, 0x3A, 0x3B, 0x3D, 0x3E})
@@ -541,6 +544,7 @@ class KVMController:
         self.notch_range = None
         self.on_crossing = None
         self._crossing_failed = False
+        self._crossing_failed_at = 0.0
         self._bounds_cache = None
         self._bounds_at = 0.0
         # Both hold the pointer methods off while the shortcut keeps working. Paused is the
@@ -959,6 +963,16 @@ class KVMController:
                     result = self.translator.key_result(event_type, event, self.trigger_code, self.cfg.key_map)
                     if result.is_trigger:
                         return self._handle_trigger(result, event)
+                # And this Mac's own pointer, which can push through the edge to take it back
+                # across; the PC's events carry the injected mark and never reach the edge. Its
+                # clicks go the same way, since a click is what resets a push.
+                if (
+                    event_type not in (self.quartz.kCGEventKeyDown, self.quartz.kCGEventKeyUp, self.quartz.kCGEventFlagsChanged)
+                    and event_type != media_keys.NX_SYSDEFINED_EVENT_TYPE
+                    and not self.gesture_translator.wants(event_type)
+                    and not self._was_injected(event)
+                ):
+                    return self._handle_local_mouse(event_type, event)
                 return event
             if self.gesture_translator.wants(event_type):
                 return self._handle_gesture_event(event_type, event)
@@ -984,7 +998,14 @@ class KVMController:
                     return self._handle_trigger(result, event)
                 if self.redirecting:
                     keycode = self.quartz.CGEventGetIntegerValueField(event, self.quartz.kCGKeyboardEventKeycode)
-                    if self.ignore_gate.keeps(ignored.key(keycode), result.is_down):
+                    entry = ignored.key(keycode)
+                    kept = self.ignore_gate.keeps(entry, result.is_down)
+                    if keycode == CAPS_LOCK_KEY_CODE:
+                        # One event per toggle, always read as down and sent as a press and its
+                        # release, so it is a whole press to the gate too: a lone down would pin
+                        # its route until input came home, whatever the list said by then.
+                        self.ignore_gate.keeps(entry, False)
+                    if kept:
                         return event
                 messages = result.messages
             else:
@@ -994,6 +1015,10 @@ class KVMController:
                 if button is not None and self.ignore_gate.keeps(ignored.button(button[0]), button[1]):
                     return event
                 messages = self.translator.mouse_messages(event_type, event)
+                if button is not None and not messages:
+                    # A button the wire has no name for stays on this Mac, as one does on the PC,
+                    # rather than being swallowed and reaching neither.
+                    return event
             if not self.redirecting:
                 return event
             for message in messages:
@@ -1031,10 +1056,14 @@ class KVMController:
         warped back to where the push began, which is the resistance; at
         breakthrough input moves to Windows. Everything else passes through.
         Fails open twice over: the caller's handler already returns the event
-        on any exception, and a failure here also switches crossing off until
-        the next settings save, so one broken geometry call cannot log an
-        exception per mouse move."""
-        if self._crossing_failed or not self.crossing.armed:
+        on any exception, and a failure here also switches crossing off for
+        CROSSING_RETRY_SECONDS or until the next settings save, so one broken
+        geometry call cannot log an exception per mouse move -- and a passing
+        one cannot leave the edge dead until someone thinks to save a setting."""
+        if self._crossing_failed and self.clock() - self._crossing_failed_at < CROSSING_RETRY_SECONDS:
+            return event
+        self._crossing_failed = False
+        if not self.crossing.armed:
             return event
         if self.crossing_paused or self.full_screen_app is not None or not self.cfg.send_to_windows:
             return event
@@ -1061,10 +1090,21 @@ class KVMController:
             )
         except Exception:
             self._crossing_failed = True
+            self._crossing_failed_at = self.clock()
             self.crossing.reset()
-            self.logger.exception("crossing failed; edge switching is off until settings are saved again")
+            self.logger.exception("crossing failed; edge switching is off for %.0fs", CROSSING_RETRY_SECONDS)
             return event
         if step.crossed:
+            if self.receiving:
+                # The PC is driving this Mac and this Mac's own pointer pushed through: the PC's
+                # input goes home first, over its own link, and this Mac's follows it across. The
+                # PC's focus home clears receiving here too, later, and finds it already clear.
+                # The Mac half of the PC's own push back (27-09-2026).
+                send_home = self.send_peer_home
+                if send_home is None or not send_home():
+                    self.logger.warning("cannot cross: Windows is driving this Mac and cannot be reached")
+                    return event
+                self.receiving = False
             if self.set_redirecting(True, edge=step.edge, offset=step.offset):
                 self._notify_crossing("cross", step)
                 return None
@@ -1086,12 +1126,9 @@ class KVMController:
 
     def _default_desktop_bounds(self):
         quartz = self.quartz
-        error, displays, count = quartz.CGGetActiveDisplayList(16, None, None)
-        if error != 0 or not count:
-            raise RuntimeError(f"CGGetActiveDisplayList failed: {error}")
         left = top = float("inf")
         right = bottom = float("-inf")
-        for display in list(displays)[:count]:
+        for display in desktop_mac.display_ids(quartz):
             rect = quartz.CGDisplayBounds(display)
             left = min(left, rect.origin.x)
             top = min(top, rect.origin.y)

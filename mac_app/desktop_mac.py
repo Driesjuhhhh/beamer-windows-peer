@@ -29,13 +29,25 @@ def _require():
     return Quartz
 
 
+def display_ids(quartz=None) -> list:
+    """The displays that make up the desktop: the active list, unless it is empty. It is empty
+    while the displays sleep, and a sleeping display is still where it was, so the online list
+    stands in (27-09-2026: with the Mac's display asleep, the PC's pointer arriving and this Mac's
+    own push both failed on the empty list, and each turned its crossing off)."""
+    quartz = quartz or _require()
+    error, ids, count = quartz.CGGetActiveDisplayList(MAX_DISPLAYS, None, None)
+    if error == 0 and count:
+        return list(ids)[:count]
+    error, ids, count = quartz.CGGetOnlineDisplayList(MAX_DISPLAYS, None, None)
+    if error != 0 or not count:
+        raise RuntimeError(f"no display to measure: CGGetOnlineDisplayList returned {error}")
+    return list(ids)[:count]
+
+
 def monitors() -> List[Rect]:
     quartz = _require()
-    error, display_ids, _count = quartz.CGGetActiveDisplayList(MAX_DISPLAYS, None, None)
-    if error:
-        raise RuntimeError(f"CGGetActiveDisplayList failed with error {error}")
     found: List[Rect] = []
-    for display_id in display_ids:
+    for display_id in display_ids(quartz):
         bounds = quartz.CGDisplayBounds(display_id)
         found.append(
             Rect(

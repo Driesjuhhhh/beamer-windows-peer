@@ -82,6 +82,35 @@ for archive in "$APP"/Contents/Resources/lib/python3*.zip; do
     zip -q -d "$archive" '*.dSYM/*' || [ $? -eq 12 ]
 done
 
+# The packages py2app copies whole (rumps, cryptography, cffi, setuptools) arrive with the
+# __pycache__ pip compiled at install time, whose code objects name the venv's path on this Mac, and
+# py2app writes the building python's path into Info.plist. 1.3.0 shipped both (27-09-2026). The
+# caches go, inside the zip too, where zipimport never reads a __pycache__ anyway; the loose packages
+# are compiled again under a relative name, since the app never writes bytecode into its own bundle.
+find "$APP" -name __pycache__ -type d -prune -exec rm -rf {} +
+for archive in "$APP"/Contents/Resources/lib/python3*.zip; do
+    zip -q -d "$archive" '*/__pycache__/*' || [ $? -eq 12 ]
+done
+for packages in "$APP"/Contents/Resources/lib/python3.*/; do
+    .venv/bin/python3 -m compileall -q -d "lib/$(basename "$packages")" "$packages" >/dev/null
+done
+/usr/libexec/PlistBuddy -c 'Delete :PythonInfoDict:PythonExecutable' "$APP/Contents/Info.plist"
+# Anything still naming this Mac's home folder, in a file or inside the zipped stdlib, stops the build.
+.venv/bin/python3 - "$APP" "$HOME" <<'EOF'
+import pathlib, sys, zipfile
+app, home = pathlib.Path(sys.argv[1]), sys.argv[2].encode()
+found = []
+for path in app.rglob("*"):
+    if path.is_file() and not path.is_symlink():
+        if home in path.read_bytes():
+            found.append(str(path.relative_to(app)))
+        if path.suffix == ".zip":
+            with zipfile.ZipFile(path) as archive:
+                found += [f"{path.name}:{name}" for name in archive.namelist() if home in archive.read(name)]
+if found:
+    sys.exit(f"{len(found)} files in the app name {home.decode()}, first {found[:5]}")
+EOF
+
 # Every build runs under the hardened runtime, so a local build breaks the way a notarised one would.
 # Only a release takes a secure timestamp: notarisation requires it, and it needs Apple's server.
 if [ "$RELEASE" -eq 1 ]; then TIMESTAMP="--timestamp"; else TIMESTAMP="--timestamp=none"; fi

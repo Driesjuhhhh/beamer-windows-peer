@@ -61,6 +61,17 @@ class RecordedEntryTests(unittest.TestCase):
     def test_other_mouse_numbers_a_button_the_wire_has_no_name_for(self):
         self.assertEqual(ignored_titles.recorded_entry("other", 5, self.TRIGGER), ignored.button("6"))
 
+    def test_a_modifier_already_held_is_not_recorded_on_its_release(self):
+        # Left Shift is keycode 0x38, device bit 0x2; Right Shift 0x3C, device bit 0x4.
+        self.assertTrue(ignored_titles.is_modifier_release(0x38, 0x100))
+        self.assertTrue(ignored_titles.is_modifier_release(0x38, 0x20000 | 0x4))
+        self.assertFalse(ignored_titles.is_modifier_release(0x38, 0x20000 | 0x2))
+        self.assertFalse(ignored_titles.is_modifier_release(0x38, 0x20000))
+
+    def test_caps_lock_and_ordinary_keys_are_always_presses(self):
+        self.assertFalse(ignored_titles.is_modifier_release(0x39, 0))
+        self.assertFalse(ignored_titles.is_modifier_release(0x00, 0))
+
     def _media_data1(self, nx_key, down):
         state = 0x0A if down else 0x0B
         return (nx_key << 16) | (state << 8)

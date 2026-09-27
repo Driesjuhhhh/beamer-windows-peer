@@ -4,7 +4,7 @@ out of the AppKit recorder in widgets.py so both are testable without it.
 
 import ignored
 import media_keys
-from bridge import WIRE_OTHER_BUTTONS
+from bridge import NX_DEVICE_MODIFIER_BITS, WIRE_OTHER_BUTTONS
 from key_codes import PRINTABLE_KEY_FALLBACKS, SPECIAL_KEY_NAMES, key_title
 
 BUTTON_TITLES = {
@@ -39,6 +39,26 @@ def entry_title(entry):
     if kind == "media":
         return MEDIA_TITLES.get(value, value)
     return entry
+
+
+# Shift, Control, Option and Command, left and right, to the flag their family sets: the same
+# numbers in NSEvent's modifierFlags and CoreGraphics' event flags.
+FAMILY_FLAGS = {0x38: 1 << 17, 0x3C: 1 << 17, 0x3B: 1 << 18, 0x3E: 1 << 18, 0x3A: 1 << 19, 0x3D: 1 << 19, 0x37: 1 << 20, 0x36: 1 << 20}
+
+
+def is_modifier_release(keycode, flags):
+    """Whether a FlagsChanged event is a modifier going up, which the recorder listens past: a
+    modifier already held when recording starts would otherwise be recorded on its release. Read
+    the way the event tap reads it: the key's own device bit where the event carries any, else its
+    family's bit, which is also what a release with nothing else held carries -- none."""
+    keycode, flags = int(keycode), int(flags)
+    family = FAMILY_FLAGS.get(keycode)
+    if family is None:
+        return False
+    # The device bits are distinct, so their sum is their union.
+    if flags & sum(NX_DEVICE_MODIFIER_BITS.values()):
+        return not flags & NX_DEVICE_MODIFIER_BITS[keycode]
+    return not flags & family
 
 
 def recorded_entry(kind, value, trigger_code):

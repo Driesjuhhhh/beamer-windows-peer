@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
 import theme
 import tokens
 
+LEFT_CTRL_VK = 0xA2
+
 
 def label(text: str, role: str, wrap: bool = False) -> QLabel:
     item = QLabel(text)
@@ -326,6 +328,7 @@ class InputRecorder(QPushButton):
         self.on_record = on_record
         self.hook_vk = hook_vk
         self.armed = False
+        self.left_ctrl_held = False
         self.setProperty("vernier", "keycap")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAccessibleName(title)
@@ -343,6 +346,7 @@ class InputRecorder(QPushButton):
         self.clicked.connect(self._toggle)
 
     def cancel(self) -> None:
+        self.left_ctrl_held = False
         if not self.armed:
             return
         self.armed = False
@@ -371,10 +375,19 @@ class InputRecorder(QPushButton):
             vk = self.hook_vk(event.nativeVirtualKey(), event.nativeScanCode())
             if not vk:
                 return True
+            if vk == LEFT_CTRL_VK:
+                # AltGr arrives as a Left Ctrl Windows makes up, then the Right Alt pressed, so a
+                # Left Ctrl waits: let go, it is what was pressed; followed by another key, that
+                # key is (proved on the rig 27-09-2026, where AltGr recorded as Left Ctrl).
+                self.left_ctrl_held = True
+                return True
             self.cancel()
             self.on_record("key", vk)
             return True
         if kind == QEvent.Type.KeyRelease:
+            if self.left_ctrl_held and self.hook_vk(event.nativeVirtualKey(), event.nativeScanCode()) == LEFT_CTRL_VK:
+                self.cancel()
+                self.on_record("key", LEFT_CTRL_VK)
             return True
         if kind == QEvent.Type.MouseButtonPress:
             name = self.BUTTONS.get(event.button())

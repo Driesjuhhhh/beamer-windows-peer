@@ -138,6 +138,9 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(capture_win.hook_vk(0x11, 0x11D), 0xA3)
         self.assertEqual(capture_win.hook_vk(0x12, 0x38), 0xA4)
         self.assertEqual(capture_win.hook_vk(0x12, 0x138), 0xA5)
+        # How Qt 6 reports them on the rig: the extended prefix, not the bit.
+        self.assertEqual(capture_win.hook_vk(0x11, 0xE01D), 0xA3)
+        self.assertEqual(capture_win.hook_vk(0x12, 0xE038), 0xA5)
         self.assertEqual(capture_win.hook_vk(0x10, 0x2A), 0xA0)
         self.assertEqual(capture_win.hook_vk(0x10, 0x36), 0xA1)
         self.assertEqual(capture_win.hook_vk(VK_A, 0x1E), VK_A)
