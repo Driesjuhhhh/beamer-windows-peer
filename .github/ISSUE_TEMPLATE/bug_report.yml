@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in Beamer is not working as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: beamer-version
+    attributes:
+      label: Beamer version
+      description: Shown in About Beamer on each machine. Say if the two differ.
+      placeholder: "1.3.3"
+    validations:
+      required: true
+  - type: input
+    id: mac-version
+    attributes:
+      label: macOS version
+      placeholder: "macOS 26.1"
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Which way round
+      options:
+        - The Mac was driving the PC
+        - The PC was driving the Mac
+        - Both, or not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Attach Beamer.log from each machine, or paste the lines from around the time it went wrong.
+        Mac: ~/Library/Logs/Beamer/Beamer.log (in Finder, Go > Go to Folder and paste ~/Library/Logs/Beamer)
+        Windows: %LOCALAPPDATA%\Beamer\Beamer.log (paste %LOCALAPPDATA%\Beamer into File Explorer's address bar)
+        The log holds your machines' names and local network addresses; remove them if you would rather not share them.

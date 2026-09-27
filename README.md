@@ -401,3 +401,7 @@ GPL-3.0; see [LICENSE](LICENSE). Releases up to and including 1.2.0 were MIT.
 Beamer is free and made by one person. Issues are welcome and read, but there is no guarantee of a
 reply. Report security problems privately, as [SECURITY.md](SECURITY.md) describes. Home page:
 [kalkmancode.co.uk/beamer](https://kalkmancode.co.uk/beamer).
+
+A bug report is far easier to act on with each machine's log attached. Beamer keeps one on each:
+`~/Library/Logs/Beamer/Beamer.log` on the Mac and `%LOCALAPPDATA%\Beamer\Beamer.log` on Windows.
+They hold your machines' names and local network addresses, so look them over before posting.
