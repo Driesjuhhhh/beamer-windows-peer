@@ -26,10 +26,10 @@ def _colorref(hex_colour: str) -> int:
     return (b << 16) | (g << 8) | r
 
 
-def apply_caption(hwnd: int, palette: dict) -> None:
+def apply_caption(hwnd: int, palette: dict, dark: bool = True) -> None:
     """Paints hwnd's native title bar with Vernier's ground, ink and rule from `palette`
-    (tokens.PALETTE), replacing the Windows accent colour. Vernier is dark only, so this pins the
-    native caption to dark mode too. Cosmetic only: any failure (older Windows, missing dwmapi, a
+    (theme.P), replacing the Windows accent colour, and toggles the native caption theme so the
+    caption buttons' glyphs follow. Cosmetic only: any failure (older Windows, missing dwmapi, a
     bad hwnd) is swallowed so the caller's window still opens."""
     if sys.platform != "win32":
         return
@@ -37,9 +37,9 @@ def apply_caption(hwnd: int, palette: dict) -> None:
         import ctypes
 
         dwmapi = ctypes.windll.dwmapi
-        dark = ctypes.c_int(1)
+        dark_mode = ctypes.c_int(1 if dark else 0)
         for attribute in (DWMWA_USE_IMMERSIVE_DARK_MODE, 19):  # 19 is the pre-20H1 alias
-            if dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(dark), ctypes.sizeof(dark)) == 0:
+            if dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode)) == 0:
                 break
         caption = ctypes.c_int(_colorref(palette["ground"]))
         dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ctypes.byref(caption), ctypes.sizeof(caption))

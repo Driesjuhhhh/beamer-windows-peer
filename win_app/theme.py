@@ -1,4 +1,4 @@
-"""Vernier theming for the Windows receiver, built from tokens.py.
+"""Vernier theming for the Windows receiver, built from tokens.py, light and dark.
 
 Widgets opt into a component with a `vernier` property set before the stylesheet is applied, or
 re-polished with `repolish(widget)` after it changes. QSS cannot express letter spacing, so the
@@ -14,7 +14,10 @@ import sys
 import titlebar
 import tokens
 
-P = tokens.PALETTE
+# Swapped in place by set_dark(), never reassigned, so a widget that took a reference to P (the
+# stylesheet template's `values = dict(P)` included) sees the new palette without being rebuilt.
+P = dict(tokens.PALETTE)
+_dark = True
 TYPE = tokens.TYPE
 RADIUS = tokens.RADIUS
 
@@ -22,8 +25,7 @@ _sans = "Segoe UI"
 _mono = "Consolas"
 
 # Derived here because tokens.py has no value for them: the heading size inside a module (the
-# mock sets the Windows status word at 22px, between body and status_word_narrow), and the
-# countdown numeral (30px in the mock).
+# Windows status word, 22px, between body and status_word_narrow), and the countdown numeral.
 HEADING = 22.0
 COUNT = 30.0
 
@@ -33,9 +35,9 @@ COUNT = 30.0
 # 176, not 168, so the foot's kalkmancode.co.uk/beamer fits as Windows draws it.
 SIDEBAR_WIDTH = 176
 
-# The pairing code sits beside the countdown and the Pair button now, in a page narrower than
-# the window used to be with no sidebar -- tokens.TYPE["code"] (92px, shared with the Mac's own
-# pairing card) does not fit that row at 640 wide, so this page uses its own smaller size.
+# The pairing code sits beside the countdown and the Pair button, in a page narrowed by the
+# sidebar -- tokens.TYPE["code"] (92px, shared with the Mac's own pairing card) does not fit
+# that row at 640 wide, so this page uses its own smaller size.
 PAIRING_CODE = 48.0
 
 # One tone per receiver state, shared by the LED, the tray dot and the heading.
@@ -80,6 +82,65 @@ def mono() -> str:
 
 def colour(name: str) -> str:
     return P[name]
+
+
+def set_dark(dark: bool) -> None:
+    """Swaps every colour `colour()`/`P` hands out to the dark or light palette, in place."""
+    global _dark
+    _dark = dark
+    P.clear()
+    P.update(tokens.PALETTE if dark else tokens.PALETTE_LIGHT)
+
+
+def is_dark() -> bool:
+    return _dark
+
+
+def wants_dark(choice: str, system_dark: bool) -> bool:
+    """What the `appearance` setting means for `set_dark`: "dark" and "light" are absolute,
+    "system" and anything unrecognised follow the system."""
+    if choice == "dark":
+        return True
+    if choice == "light":
+        return False
+    return system_dark
+
+
+def system_dark() -> bool:
+    """The system's own light/dark choice. AppsUseLightTheme, not the taskbar's
+    SystemUsesLightTheme, which Windows lets disagree with it -- this window is an app."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        ) as key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except (ImportError, OSError):
+        pass
+    from PySide6.QtGui import QGuiApplication
+
+    app = QGuiApplication.instance()
+    if app is None:
+        return True
+    from PySide6.QtCore import Qt
+
+    return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+
+
+def watch_system(callback) -> None:
+    """Calls `callback()` whenever Windows' own light/dark choice changes, for "system" to follow
+    it live. A no-op with no QGuiApplication yet, or on a PySide6 old enough to predate
+    colorSchemeChanged (6.5) -- the guard costs nothing and the pin in requirements-win.txt may
+    move under us."""
+    from PySide6.QtGui import QGuiApplication
+
+    app = QGuiApplication.instance()
+    if app is None:
+        return
+    hints = app.styleHints()
+    if hasattr(hints, "colorSchemeChanged"):
+        hints.colorSchemeChanged.connect(lambda _scheme: callback())
 
 
 def state_tone(state: str) -> str:
@@ -163,6 +224,7 @@ QLabel[vernier="note"] {{ color: {ink_2}; font-size: {note}px; }}
 QLabel[vernier="note-amber"] {{ color: {amber}; font-size: {note}px; }}
 QLabel[vernier="note-fault"] {{ color: {fault}; font-size: {note}px; }}
 QLabel[vernier="note-live"] {{ color: {signal}; font-size: {note}px; }}
+QLabel[vernier="note-quiet"] {{ color: {ink_3}; font-size: {note}px; }}
 QLabel[vernier="key"] {{ color: {ink_2}; font-size: {note}px; }}
 QLabel[vernier="mono"] {{ color: {ink_2}; font-family: "{mono}"; font-size: {note}px; }}
 QLabel[vernier="readout"] {{ color: {ink}; font-family: "{mono}"; font-size: {note}px; font-weight: 700; }}
@@ -246,9 +308,8 @@ QLabel[vernier="tile-name"] {{ color: {ink}; font-size: {body}px; font-weight: 6
 QFrame[vernier="tile"] {{ background: {ground}; border: 1px solid {rule}; border-radius: {r_button}px; }}
 QFrame[vernier="tile"]:hover {{ border-color: {edge}; }}
 QFrame[vernier="tile"]:focus {{ border: 2px solid {signal}; }}
-QFrame[vernier="tile-on"] {{ background: {ground}; border: 2px solid {ink}; border-radius: {r_button}px; }}
+QFrame[vernier="tile-on"] {{ background: {ground}; border: 1px solid {edge}; border-radius: {r_button}px; }}
 QFrame[vernier="tile-on"]:focus {{ border: 2px solid {signal}; }}
-QFrame[vernier="tile-on"]:disabled {{ border-color: {edge}; }}
 QFrame[vernier="entry"] {{ background: {well}; border: 1px solid {rule}; border-radius: {r_field}px; }}
 QPushButton[vernier="remove"] {{
     background: transparent;
@@ -310,6 +371,6 @@ QMenu::separator {{ height: 1px; background: {rule}; margin: 4px 6px; }}
 
 
 def apply_titlebar(hwnd: int) -> None:
-    """Paints the native title bar at hwnd in the Vernier ground, so it stops following the
-    user's accent colour."""
-    titlebar.apply_caption(hwnd, P)
+    """Paints the native title bar at hwnd in Vernier's current ground, light or dark, so it stops
+    following the user's accent colour."""
+    titlebar.apply_caption(hwnd, P, is_dark())

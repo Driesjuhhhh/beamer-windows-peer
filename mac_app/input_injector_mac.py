@@ -8,9 +8,9 @@ nothing is translated on arrival.
 
 Every event posted from here carries INJECTED_MARK in its source user data,
 which is how bridge.py's event tap tells Beamer's own injection apart from
-Toby's hands on the Mac: without that the tap would read a pointer the PC is
-driving as a push against the Mac's crossing edge and switch input straight
-back.
+a real hand on the Mac's own keyboard or trackpad: without that the tap
+would read a pointer the PC is driving as a push against the Mac's crossing
+edge and switch input straight back.
 
 Quartz is imported at module level and guarded the same way clipboard_mac
 guards AppKit, so this module stays importable, and its behaviour fakeable,

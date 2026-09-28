@@ -21,8 +21,8 @@ Set-Location $ScriptDir
 $ProjectDir = Split-Path -Parent $ScriptDir
 
 if ($Release) {
-    # docs\ is not part of the build and other sessions write there; anything else uncommitted would
-    # ship code that no commit records.
+    # docs\ is not part of the build and changes independently of it; anything else uncommitted
+    # would ship code that no commit records.
     $Dirty = git -C $ProjectDir status --porcelain -- . ':(exclude)docs'
     if ($Dirty) { throw 'Uncommitted changes outside docs\ - commit them so the release matches a commit' }
     $Iscc = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'

@@ -62,6 +62,11 @@ class ResistanceTests(unittest.TestCase):
         self.assertGreater(second.pressure, first.pressure)
         self.assertFalse(second.crossed)
 
+    def test_the_crossing_step_says_where_it_gave(self):
+        crossed = engine(resistance_px=0).feed(RIGHT_X, 420.0, 20, 0, BOUNDS, 1.0)
+        self.assertTrue(crossed.crossed)
+        self.assertEqual(crossed.pin, (RIGHT_X, 420.0))
+
     def test_arriving_at_the_edge_counts_only_the_overshoot(self):
         machine = engine()
         machine.feed(1700.0, 500.0, 0, 0, BOUNDS, 1.0)
@@ -181,7 +186,9 @@ class BreakthroughTests(unittest.TestCase):
         # `edge` stays "right" in config with the edge method off; it must not arm Windows' left.
         self.assertEqual(engine(methods=("shortcut", "notch"), edge="right").home_edge(), "bottom")
         self.assertEqual(engine(methods=("corner",), corner="top_left").home_edge(), "right")
-        self.assertIsNone(engine(methods=("shortcut",)).home_edge())
+        # With only the shortcut on, the PC's edge facing this Mac still leads home.
+        self.assertEqual(engine(methods=("shortcut",), edge="right").home_edge(), "left")
+        self.assertEqual(engine(methods=("shortcut",), edge="top").home_edge(), "bottom")
 
     def test_arrival_point_sits_just_inside_the_edge(self):
         self.assertEqual(CrossingEngine.arrival_point("left", 0.5, BOUNDS), (2.0, 558.0))
@@ -283,6 +290,107 @@ class NotchTests(unittest.TestCase):
         machine = engine(methods=("notch",))
         step = drive(machine, 860.0, 0.0, 0, -30, 10)
         self.assertFalse(step.crossed)
+
+
+
+class PartOfTheEdgeTests(unittest.TestCase):
+    """Part of the edge: the chosen thirds of the edge cross, the rest is a plain wall."""
+
+    def test_only_the_chosen_thirds_cross(self):
+        # 1117 tall: the thirds break at about 372 and 745.
+        for y, crosses in ((100.0, False), (560.0, True), (1000.0, True)):
+            with self.subTest(y=y):
+                machine = engine(methods=("part",), parts=("middle", "end"))
+                self.assertEqual(push_right(machine, 20, y=y).crossed, crosses)
+
+    def test_the_glow_region_is_the_third_being_pushed(self):
+        machine = engine(methods=("part",), parts=("middle",))
+        step = drive(machine, RIGHT_X, 560.0, 20, 0, 2)
+        x, y, w, h = step.region
+        self.assertAlmostEqual((y, h), (1117 / 3, 1117 / 3), places=3)
+
+    def test_thirds_are_the_pointers_own_displays(self):
+        # A 1117-tall MacBook as the rightmost display, top-aligned beside a 1440-tall external:
+        # on the 1440 box its end third would start at 960, 157 points from its bottom.
+        displays = [(-2560, 0, 0, 1440), (0, 0, 1728, 1117)]
+        bounds = (-2560, 0, 1728, 1440)
+        machine = engine(methods=("part",), parts=("end",))
+        result = drive(machine, RIGHT_X, 800.0, 20, 0, 20, bounds=bounds)
+        self.assertFalse(result.crossed, "measured on the desktop box, 800 is the middle third")
+        machine = engine(methods=("part",), parts=("end",))
+        for index in range(20):
+            result = machine.feed(RIGHT_X, 800.0, 20, 0, bounds, 1.0 + index * 0.01, displays=displays)
+            if result.crossed:
+                break
+        self.assertTrue(result.crossed)
+
+    def test_it_is_the_way_home_as_the_edge_would_be(self):
+        self.assertEqual(engine(methods=("part",)).home_edge(), "left")
+        self.assertTrue(engine(methods=("part",)).armed)
+
+
+class MonitorLayoutTests(unittest.TestCase):
+    """Displays as (left, top, right, bottom) in Quartz points, the way the tap sees them."""
+
+    # A MacBook under a wider external: the MacBook's right edge stops short of the desktop's.
+    UNDER = [(0, 0, 2560, 1440), (416, 1440, 2144, 2557)]
+    UNDER_BOUNDS = (0, 0, 2560, 2557)
+
+    def feed_at(self, machine, x, y, dx, dy, displays, bounds, times=20):
+        result = None
+        for index in range(times):
+            result = machine.feed(x, y, dx, dy, bounds, 1.0 + index * 0.01, displays=displays)
+            if result.crossed:
+                break
+        return result
+
+    def test_a_shorter_displays_own_edge_is_a_wall_when_nothing_lies_beyond(self):
+        step = self.feed_at(engine(), 2143.0, 2000.0, 20, 0, self.UNDER, self.UNDER_BOUNDS)
+        self.assertTrue(step.crossed)
+
+    def test_an_edge_with_another_display_beyond_it_is_not(self):
+        side = [(0, 0, 1728, 1117), (1728, 0, 3648, 1080)]
+        step = self.feed_at(engine(), 1727.0, 500.0, 20, 0, side, (0, 0, 3648, 1117))
+        self.assertFalse(step.crossed)
+
+    def test_the_bottom_of_a_short_display_beside_a_tall_one_crosses(self):
+        tall_short = [(0, 0, 100, 300), (100, 0, 200, 100)]
+        step = self.feed_at(engine(edge="bottom"), 150.0, 99.0, 0, 20, tall_short, (0, 0, 200, 300))
+        self.assertTrue(step.crossed)
+
+    def test_part_of_the_edge_counts_its_thirds_on_the_pointers_display(self):
+        machine = engine(methods=("part",), parts=("middle",))
+        step = self.feed_at(machine, 2143.0, 1440 + 1117 / 2, 20, 0, self.UNDER, self.UNDER_BOUNDS)
+        self.assertTrue(step.crossed)
+        machine = engine(methods=("part",), parts=("middle",))
+        step = self.feed_at(machine, 2143.0, 1450.0, 20, 0, self.UNDER, self.UNDER_BOUNDS)
+        self.assertFalse(step.crossed)
+
+    def test_an_arrival_never_lands_in_a_gap(self):
+        staggered = [(0, 0, 1920, 1080), (1920, 0, 3200, 720)]
+        x, y = CrossingEngine.arrival_point("right", 0.9, (0, 0, 3200, 1080), displays=staggered)
+        self.assertTrue(any(d[0] <= x < d[2] and d[1] <= y < d[3] for d in staggered), (x, y))
+
+    def test_an_arrival_lands_on_whichever_of_two_stacked_displays_holds_it(self):
+        stacked = [(0, 0, 1512, 982), (0, 982, 1920, 2062)]
+        x, y = CrossingEngine.arrival_point("left", 0.9, (0, 0, 1920, 2062), displays=stacked)
+        self.assertEqual(x, 2.0)
+        self.assertGreater(y, 982)
+
+
+
+class CornerAndEdgeTests(unittest.TestCase):
+    def test_a_straight_push_in_the_corners_box_crosses_by_the_edge(self):
+        machine = engine(methods=("corner", "edge"), corner="top_right")
+        step = drive(machine, RIGHT_X, 3.0, 40, 0, 20)
+        self.assertTrue(step.crossed)
+        self.assertEqual(step.via, "edge")
+
+    def test_a_diagonal_push_there_is_still_the_corner(self):
+        machine = engine(methods=("corner", "edge"), corner="top_right")
+        step = drive(machine, RIGHT_X, 0.0, 30, -30, 20)
+        self.assertTrue(step.crossed)
+        self.assertEqual(step.via, "corner")
 
 
 if __name__ == "__main__":

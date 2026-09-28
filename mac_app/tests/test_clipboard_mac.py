@@ -29,6 +29,10 @@ class FakePasteboard:
         self.string = string
         self.cleared = 0
         self.written = []
+        self.count = 1
+
+    def changeCount(self):
+        return self.count
 
     def stringForType_(self, kind):
         return self.string
@@ -38,6 +42,7 @@ class FakePasteboard:
 
     def clearContents(self):
         self.cleared += 1
+        self.count += 1
 
     def setString_forType_(self, text, kind):
         self.written.append((kind, text))
@@ -92,6 +97,51 @@ class PasteboardImageTests(unittest.TestCase):
 
     def test_set_contents_with_nothing_writes_nothing(self):
         self.assertFalse(clipboard_mac.set_contents(None, None))
+
+
+
+@unittest.skipIf(clipboard_mac.AppKit is None, "AppKit is only available on macOS")
+class ChangedContentsTests(unittest.TestCase):
+    def setUp(self):
+        AppKit = clipboard_mac.AppKit
+        self.board = FakePasteboard(string="copied")
+        fake_appkit = type("FakeAppKit", (), {})()
+        fake_appkit.NSPasteboard = type("NSPasteboard", (), {"generalPasteboard": staticmethod(lambda: self.board)})
+        fake_appkit.NSData = AppKit.NSData
+        for name in ("NSPasteboardTypeString", "NSPasteboardTypePNG", "NSPasteboardTypeTIFF"):
+            setattr(fake_appkit, name, getattr(AppKit, name))
+        real = clipboard_mac.AppKit
+        clipboard_mac.AppKit = fake_appkit
+        clipboard_mac.forget_sync()
+        self.addCleanup(setattr, clipboard_mac, "AppKit", real)
+        self.addCleanup(clipboard_mac.forget_sync)
+
+    def test_an_unchanged_clipboard_is_sent_once(self):
+        self.assertEqual(clipboard_mac.changed_contents()[0], "copied")
+        self.assertEqual(clipboard_mac.changed_contents(), (None, None))
+
+    def test_a_new_copy_is_sent_again(self):
+        clipboard_mac.changed_contents()
+        self.board.count += 1
+        self.assertEqual(clipboard_mac.changed_contents()[0], "copied")
+
+    def test_what_the_peer_sent_is_not_sent_back(self):
+        clipboard_mac.set_contents("from the pc", None)
+        self.assertEqual(clipboard_mac.changed_contents(), (None, None))
+
+    def test_a_failed_read_does_not_hold_the_clipboard_back(self):
+        real = clipboard_mac.get_contents
+        clipboard_mac.get_contents = lambda: (None, None)
+        try:
+            self.assertEqual(clipboard_mac.changed_contents(), (None, None))
+        finally:
+            clipboard_mac.get_contents = real
+        self.assertEqual(clipboard_mac.changed_contents()[0], "copied")
+
+    def test_a_new_link_sends_it_again(self):
+        clipboard_mac.changed_contents()
+        clipboard_mac.forget_sync()
+        self.assertEqual(clipboard_mac.changed_contents()[0], "copied")
 
 
 if __name__ == "__main__":

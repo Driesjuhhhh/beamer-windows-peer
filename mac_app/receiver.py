@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from enum import Enum
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 import return_edge as crossing
 import protocol
@@ -72,7 +72,37 @@ class ProcessedSequence:
             return self._latest
 
 
-def handle_message(message: dict, injector=None) -> bool:
+class InputScale:
+    """This machine's own speed for the pointer and scroll arriving from the peer. The peer sends
+    what its own acceleration made of the hand's movement, and this machine may accelerate it
+    again, so how fast it feels here is a setting here. Fractions carry over between messages, so
+    a slow movement at a low speed still moves. `reverse` turns the peer's scroll round."""
+
+    MIN, MAX = 0.25, 4.0
+
+    def __init__(self, pointer: float = 1.0, scroll: float = 1.0, reverse: bool = False) -> None:
+        self.pointer = min(self.MAX, max(self.MIN, float(pointer)))
+        self.scroll = min(self.MAX, max(self.MIN, float(scroll)))
+        self.reverse = bool(reverse)
+        self._carry = [0.0, 0.0]
+
+    def move(self, dx: int, dy: int) -> Tuple[int, int]:
+        if self.pointer == 1.0:
+            return dx, dy
+        x = dx * self.pointer + self._carry[0]
+        y = dy * self.pointer + self._carry[1]
+        whole_x, whole_y = int(x), int(y)
+        self._carry = [x - whole_x, y - whole_y]
+        return whole_x, whole_y
+
+    def wheel(self, dy, dx):
+        if self.scroll == 1.0 and not self.reverse:
+            return dy, dx
+        sign = -1.0 if self.reverse else 1.0
+        return dy * self.scroll * sign, dx * self.scroll * sign
+
+
+def handle_message(message: dict, injector=None, scale: Optional[InputScale] = None) -> bool:
     """Inject one input event. `injector` defaults to the real input_injector
     module, imported lazily here (not at module load) so receiver.py stays
     importable — and its non-injection logic testable — on a machine without
@@ -92,13 +122,21 @@ def handle_message(message: dict, injector=None) -> bool:
     elif message_type == protocol.MSG_KEYUP:
         injector.inject_key(data["key"], down=False)
     elif message_type == protocol.MSG_MOUSEMOVE:
-        injector.inject_mouse_move(int(data["dx"]), int(data["dy"]))
+        dx, dy = int(data["dx"]), int(data["dy"])
+        if scale is not None and (dx or dy):
+            dx, dy = scale.move(dx, dy)
+            if not (dx or dy):
+                return True
+        injector.inject_mouse_move(dx, dy)
     elif message_type == protocol.MSG_MOUSEDOWN:
         injector.inject_mouse_button(data["button"], down=True)
     elif message_type == protocol.MSG_MOUSEUP:
         injector.inject_mouse_button(data["button"], down=False)
     elif message_type == protocol.MSG_SCROLL:
-        injector.inject_scroll(data["dy"], data.get("dx", 0), data.get("mode", "line"))
+        dy, dx = data["dy"], data.get("dx", 0)
+        if scale is not None:
+            dy, dx = scale.wheel(dy, dx)
+        injector.inject_scroll(dy, dx, data.get("mode", "line"))
     elif message_type == protocol.MSG_GESTURE:
         injector.inject_gesture(data["name"])
     else:
@@ -114,11 +152,12 @@ class ReceiverServer:
         clipboard=None,
         unlock=None,
         desktop=None,
-        pressure_callback: Optional[Callable[[str, float, bool], None]] = None,
+        pressure_callback: Optional[Callable[[str, float, bool, Optional[str]], None]] = None,
         injector=None,
         focus_callback: Optional[Callable[[str], None]] = None,
         peer_callback: Optional[Callable[[str, Optional[str], Optional[int]], None]] = None,
         arrangement_callback: Optional[Callable[[str, int], None]] = None,
+        arrival_callback: Optional[Callable[[str, int, int], None]] = None,
         self_name: str = "PC",
         peer_name: str = "Mac",
         self_target: str = "windows",
@@ -136,6 +175,18 @@ class ReceiverServer:
         # taken it back, because the peer fails open on its side and the
         # message saying so never reaches a dead socket.
         self._injector = injector
+        # This machine's speed for the peer's pointer and scroll; the owner replaces it when its
+        # settings change. Read once per message on the session thread.
+        self.input_scale: Optional[InputScale] = None
+        # Whether this machine's edges are held (Pause crossing, a full-screen app). A hold is
+        # about this screen, so it stops the peer's pointer going home through it as well as this
+        # machine's own; the peer's shortcut still switches. Read on the session thread.
+        self.edges_held: Callable[[], bool] = lambda: False
+        # `return_model(edge, resistance)` builds the way home the peer named from this machine's
+        # own ways in: the whole edge, only its chosen thirds, its corner, or None for no way home
+        # by the pointer. The edges on a screen follow that machine's settings, whoever's pointer
+        # pushes; without an owner's answer the whole edge is armed.
+        self.return_model: Optional[Callable[[str, int], Optional[crossing.ReturnEdge]]] = None
         self._focus_callback = focus_callback
         self._peer_driving = False
         # `peer_callback(host, return_edge, resistance_px)` fires once per
@@ -149,6 +200,13 @@ class ReceiverServer:
         # change it, so this is how the change arrives at the end that did not
         # make it.
         self._arrangement_callback = arrangement_callback
+        # `arrival_callback(edge, x, y)` fires on the session thread each time
+        # a crossing lands the pointer here, with the edge it came in by and
+        # where it was placed, in the desktop module's coordinates, and with
+        # edge None and wherever the pointer is when input comes here by a
+        # switch instead. It is how the owner plays its arrival effect; the
+        # owner marshals it.
+        self._arrival_callback = arrival_callback
         self._self_name = self_name
         self._peer_name = peer_name
         self._self_target = self_target
@@ -156,13 +214,20 @@ class ReceiverServer:
         self._status_callback = status_callback
         # `desktop` defaults to the real desktop_win module, imported lazily for
         # the same reason as `clipboard` below. `pressure_callback(edge,
-        # pressure, crossed)` is called on the session thread as the pointer
-        # is pushed against the return edge; the GUI marshals it to the glow.
+        # pressure, crossed, part)` is called on the session thread as the
+        # pointer is pushed against the return edge, `part` the third or corner
+        # pushed when the way home is only those; the GUI marshals it to the glow.
         self._desktop = desktop
         self._pressure_callback = pressure_callback
         # The way home. Armed by every focus{target:"windows"} the Mac sends,
         # which carries the return edge and resistance, and None until then.
         self._return_edge: Optional[crossing.ReturnEdge] = None
+        # The edge and resistance that focus named, kept so a settings change can rebuild the way
+        # home (`rearm_return`) without waiting for the next focus.
+        self._named_return: Optional[tuple] = None
+        # Held while the session thread feeds the way home and while a settings change rebuilds it,
+        # so a rebuild never revives a way home that was just pushed through or handed back.
+        self._return_lock = threading.RLock()
         # `unlock` defaults to the real unlock_win module, imported lazily for
         # the same reason as `clipboard` below.
         self._unlock = unlock
@@ -299,8 +364,8 @@ class ReceiverServer:
             # TIME_WAIT. On Windows the same option means something else: a
             # second bind on a port another listener holds succeeds, and the
             # two split the Mac's connections between them, so the held-port
-            # wait below never fired for a zombie Beamer (rig, 22-09-2026).
-            # Windows does not need it for TIME_WAIT, so it does without.
+            # wait below never fired for a zombie Beamer. Windows does not
+            # need it for TIME_WAIT, so it does without.
             if sys.platform != "win32":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -399,6 +464,7 @@ class ReceiverServer:
         if handshake is None:
             return
         session, version, hello = handshake
+        self._clipboard_module().forget_sync()
 
         if version != protocol.PROTOCOL_VERSION:
             LOGGER.warning(
@@ -502,7 +568,7 @@ class ReceiverServer:
                     sequence.record(message)
                     continue
                 try:
-                    processed = handle_message(message, self._injector)
+                    processed = handle_message(message, self._injector, self.input_scale)
                 except Exception:
                     LOGGER.exception("Input event from %s could not be injected", peer)
                     now = time.monotonic()
@@ -648,15 +714,25 @@ class ReceiverServer:
         a return edge is armed; True means the move was consumed — the pointer
         was held at the edge, or it broke through and the Mac has been asked
         to take input back — and must not be injected."""
-        model = self._return_edge
-        if model is None or not model.armed:
-            return False
         data = message.get("data")
         if not isinstance(data, dict):
             return False
         try:
-            desktop = self._desktop_module()
-            outcome = model.feed(desktop.monitors(), desktop.cursor_position(), float(data["dx"]), float(data["dy"]))
+            with self._return_lock:
+                model = self._return_edge
+                if model is None or not model.armed or self.edges_held():
+                    return False
+                desktop = self._desktop_module()
+                monitors, pointer = desktop.monitors(), desktop.cursor_position()
+                outcome = model.feed(monitors, pointer, float(data["dx"]), float(data["dy"]))
+                if outcome.action == crossing.CROSS:
+                    self._named_return = None
+            # Which third or corner is being pushed, so the owner lights only that.
+            part = None
+            if isinstance(model, crossing.PartEdge):
+                part = crossing.part_of(crossing.display_fraction(monitors, model.edge, pointer))
+            elif isinstance(model, crossing.CornerPush):
+                part = model.corner
             if outcome.action == crossing.HOLD:
                 desktop.set_cursor_position(*outcome.position)
             elif outcome.action == crossing.CROSS:
@@ -666,11 +742,11 @@ class ReceiverServer:
             # Logged once, not at 100Hz: the return edge is dropped until the
             # Mac's next switch re-arms it, and input keeps flowing normally.
             LOGGER.exception("Return edge failed; crossing back is off until the next switch")
-            self._return_edge = None
+            self._drop_return()
             return False
         if outcome.action == crossing.PASS:
             return False
-        self._notify_pressure(model.edge, outcome.pressure, outcome.action == crossing.CROSS)
+        self._notify_pressure(model.edge, outcome.pressure, outcome.action == crossing.CROSS, part)
         return True
 
     def send_arrangement(self, mac_edge: str, set_at: int) -> bool:
@@ -688,17 +764,18 @@ class ReceiverServer:
     def send_home(self) -> bool:
         """Send the peer's input back to it from this end, as its own return
         edge would. The escape that does not depend on that edge: the owner
-        calls it when someone here asks to switch while the peer is driving,
-        which was refused outright until the 23-09-2026 afternoon a push
-        through the edge never fired and the PC's mouse stayed on the Mac.
-        The send runs on its own thread, because the callers are a hook and
-        an event tap that must never block on a socket."""
+        calls it when someone here asks to switch while the peer is driving.
+        Earlier versions refused this outright, and a push through the edge
+        that failed to fire could then leave the peer's pointer stuck here
+        with no way back. The send runs on its own thread, because the
+        callers are a hook and an event tap that must never block on a
+        socket."""
         with self._lock:
             connection = self._client
             session = self._session_for(connection)
         if not self._peer_driving or connection is None or session is None:
             return False
-        self._return_edge = None
+        self._drop_return()
         LOGGER.info("Switch asked for here; sending input home to the %s", self._peer_name)
         threading.Thread(
             target=self._send_message,
@@ -755,7 +832,7 @@ class ReceiverServer:
         crosses in and back."""
         if not self._peer_driving:
             return
-        self._return_edge = None
+        self._drop_return()
         LOGGER.info("%s while its input was here; input returned to this %s", why, self._self_name)
         self._release_peer_keys()
         self._notify_focus(self._peer_target)
@@ -780,39 +857,88 @@ class ReceiverServer:
         except Exception:
             LOGGER.exception("Could not release the keys the %s was holding", self._peer_name)
 
-    def _notify_pressure(self, edge: str, pressure: float, crossed: bool) -> None:
+    def _notify_pressure(self, edge: str, pressure: float, crossed: bool, part: Optional[str] = None) -> None:
         if self._pressure_callback is None:
             return
         try:
-            self._pressure_callback(edge, pressure, crossed)
+            self._pressure_callback(edge, pressure, crossed, part)
         except Exception:
             LOGGER.exception("Pressure callback failed")
+
+    def rearm_return(self) -> None:
+        """Rebuilds the way home from this machine's Crossing settings as they are now, for the
+        edge and resistance the peer last named, so a change applies while the peer's input is
+        here rather than at its next crossing. Nothing happens once that input has gone home, or
+        after the way home has been pushed through."""
+        with self._return_lock:
+            named = self._named_return
+            model = self._return_edge
+            if not self._peer_driving or named is None or (model is not None and not model.armed):
+                return
+            self._arm_return({"return_edge": named[0], "resistance_px": named[1]})
+
+    def _drop_return(self) -> None:
+        """The peer's visit is over, or its way home is spent: nothing may rebuild it."""
+        with self._return_lock:
+            self._return_edge = None
+            self._named_return = None
 
     def _arm_return(self, data: dict) -> None:
         """Every switch to Windows says which edge leads home and how hard to
         push; an older Mac that says neither gets no return edge, so nothing
         it does not expect can fire."""
+        with self._return_lock:
+            self._build_return(data)
+
+    def _build_return(self, data: dict) -> None:
         edge = data.get("return_edge")
         if edge not in crossing.EDGES:
             self._return_edge = None
+            self._named_return = None
             return
         resistance = data.get("resistance_px", crossing.DEFAULT_RESISTANCE_PX)
         # json.loads accepts Infinity and NaN, and int() of either raises, which
         # nothing above this catches: a bad number gets the default instead.
         if isinstance(resistance, bool) or not isinstance(resistance, (int, float)) or not math.isfinite(resistance):
             resistance = crossing.DEFAULT_RESISTANCE_PX
-        self._return_edge = crossing.ReturnEdge(edge, int(resistance))
+        self._named_return = (edge, int(resistance))
+        if self.return_model is None:
+            self._return_edge = crossing.ReturnEdge(edge, int(resistance))
+            return
+        try:
+            self._return_edge = self.return_model(edge, int(resistance))
+        except Exception:
+            LOGGER.exception("Could not build the way home through the %s edge", edge)
+            self._return_edge = crossing.ReturnEdge(edge, int(resistance))
 
     def _place_pointer(self, data: dict) -> None:
+        """A crossing names the edge and the fraction along it, and the pointer is placed there. A
+        switch by the shortcut or a menu names neither and leaves the pointer where it was, which
+        the arrival callback gets as edge None, so the owner can show where that is."""
         edge = data.get("edge")
         offset = data.get("offset")
         if edge not in crossing.EDGES or isinstance(offset, bool) or not isinstance(offset, (int, float)):
+            if self._arrival_callback is None:
+                return
+            try:
+                x, y = self._desktop_module().cursor_position()
+                self._arrival_callback(None, x, y)
+            except Exception:
+                LOGGER.exception("Arrival callback for a switch failed")
             return
         try:
             desktop = self._desktop_module()
-            desktop.set_cursor_position(*crossing.arrival_position(desktop.monitors(), edge, offset))
+            x, y = crossing.arrival_position(desktop.monitors(), edge, offset)
+            desktop.set_cursor_position(x, y)
         except Exception:
             LOGGER.exception("Could not place the pointer at the %s edge on arrival", edge)
+            return
+        if self._arrival_callback is None:
+            return
+        try:
+            self._arrival_callback(edge, x, y)
+        except Exception:
+            LOGGER.exception("Arrival callback failed")
 
     def _begin_unlock(self, peer: str, host: str) -> None:
         """Take the console off the lock screen, if it is on one, so the input
@@ -885,7 +1011,7 @@ class ReceiverServer:
             # Released before the owner hears input is home: the Mac's tap
             # comes back on at that notice, and a modifier still down would
             # chord with the first local keystroke.
-            self._return_edge = None
+            self._drop_return()
             self._release_peer_keys()
         self._notify_focus(target)
         if target == self._self_target:
@@ -897,7 +1023,7 @@ class ReceiverServer:
             return
         clipboard = self._clipboard_module()
         try:
-            text, image = clipboard.get_contents()
+            text, image = clipboard.changed_contents()
         except Exception:
             LOGGER.exception("Failed to read the local clipboard for %s", peer)
             return

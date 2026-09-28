@@ -16,7 +16,7 @@ The comet moves by distance along the path (strokeStart and strokeEnd), in at th
 out at the right, with the notch itself hiding the way back. The package turns a conic mask instead,
 and on a card that is fine; on this tab, far wider than it is deep, it was not: half of every turn
 pointed up into the camera cutout, which has no pixels, the short sides lit all at once as the sweep
-crossed them, and the long bottom shrank the comet to a spot. Recorded 15-09-2026 as flashing.
+crossed them, and the long bottom shrank the comet to a spot: the net effect reads as flashing.
 
 Movement is integrated on the frame timer rather than left to a CABasicAnimation, because its speed
 follows pressure and retiming a running animation jumps. Reduce Motion parks the comet mid-border.
@@ -29,6 +29,7 @@ import time
 import AppKit
 import Quartz
 
+import effects
 import tokens
 from notch_island import (
     NOTCH_FALLBACK_HEIGHT,
@@ -70,10 +71,29 @@ EDGE_FINISH_S = 0.6
 EDGE_FINISH_TRAVERSE_S = 0.35
 
 
-def palette_colours(name, closed=False):
-    """CGColors for one of tokens.PALETTES, a lone colour repeated so a gradient has two stops, and
-    with `closed` ending on the first colour so a conic ring has no seam."""
-    values = list(tokens.PALETTES.get(name, tokens.PALETTES["signal"]))
+def palette_values(name):
+    """The hex colours of a glow_colour setting: one of tokens.PALETTES, else a crossing-effects
+    pack, which any style may use, else Beamer's own signal."""
+    if name in tokens.PALETTES:
+        return list(tokens.PALETTES[name])
+    try:
+        found = effects.pack(name) if name in effects.PACK_IDS else None
+    except Exception:
+        # The effects' modules failed to load; the overlay has already said so.
+        found = None
+    return list(found[1]) if found is not None else list(tokens.PALETTES["signal"])
+
+
+def dark_appearance():
+    style = AppKit.NSUserDefaults.standardUserDefaults().stringForKey_("AppleInterfaceStyle")
+    return str(style or "").lower() == "dark"
+
+
+def palette_colours(name, closed=False, dark=False):
+    """CGColors for a glow_colour setting (see palette_values), a lone colour repeated so a gradient has two stops, and
+    with `closed` ending on the first colour so a conic ring has no seam. `dark` lifts the darkest colours as the
+    crossing effects do on a dark appearance, where the Ink packs all but vanish."""
+    values = effects.legible(palette_values(name), dark)
     if len(values) == 1:
         values *= 2
     if closed:
@@ -135,6 +155,8 @@ def _rgb(red, green, blue, alpha=1.0):
 
 
 class NotchBeam(NotchIsland):
+    dark_appearance = staticmethod(dark_appearance)
+
     def __init__(self, controller, logger):
         super().__init__(controller, logger)
         self.strength = 0.0
@@ -196,11 +218,11 @@ class NotchBeam(NotchIsland):
             # in from the near shoulder, a new flash on the way out.
             self.position = (self.position + LAP * elapsed / turn_seconds(self.strength)) % LAP
         spans = comet_segments(self.position)
-        colour = self.controller.cfg.crossing["glow_colour"]
+        colour = (self.controller.cfg.crossing["glow_colour"], self.dark_appearance())
         with _no_actions():
             if colour != self.painted:
                 for gradient in self.gradients:
-                    gradient.setColors_(palette_colours(colour, closed=True))
+                    gradient.setColors_(palette_colours(colour[0], closed=True, dark=colour[1]))
                 self.painted = colour
             for segments in self.comets:
                 for layer, (start, end) in zip(segments, spans):

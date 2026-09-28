@@ -5,9 +5,9 @@ from test_bridge import FakeClock, FakeQuartz, FakeSocket, crossing_config, quie
 
 
 class UpdateConfigWhileRedirectingTests(unittest.TestCase):
-    """mac-sender-1: update_config sets self.redirecting = False directly
-    instead of going through set_redirecting(False), so it skips
-    _set_cursor_follows_mouse(True) when settings are applied mid-redirect."""
+    """update_config sets self.redirecting = False directly instead of going
+    through set_redirecting(False), so it skips _set_cursor_follows_mouse(True)
+    when settings are applied mid-redirect."""
 
     def setUp(self):
         FakeQuartz.reset_cursor_spies()

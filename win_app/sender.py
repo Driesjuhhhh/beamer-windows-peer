@@ -3,7 +3,7 @@ mac_app/bridge.py's link half, talking to the same receiver.py the Mac's
 sender talks to, over a second connection this PC opens outwards.
 
 Two links, not one bidirectional socket. The existing Mac-to-Windows link is
-the one Toby uses every day, and its sequence, acknowledgement and watchdog
+the one used every day, and its sequence, acknowledgement and watchdog
 bookkeeping is all sender-shaped; threading a second ownership state through
 it would put that link at risk for nothing. This one is opened by this PC, to
 the Mac's own listener on the same port number, so it needs no inbound
@@ -150,7 +150,7 @@ class MacSender:
         self,
         status_callback: Callable[[bool, str], None] = None,
         redirect_callback: Callable[[bool], None] = None,
-        pressure_callback: Callable[[str, float, bool], None] = None,
+        pressure_callback: Callable[[str, float, bool, Optional[str]], None] = None,
         arrangement_callback: Callable[[str, int], None] = None,
         desktop=None,
         clipboard=None,
@@ -159,11 +159,16 @@ class MacSender:
         clock=time.monotonic,
         wake_sender=wol.send_magic_packet,
         mac_lookup=wol.lookup_mac,
+        arrival_callback: Callable[[str, int, int], None] = None,
     ) -> None:
         self._status_callback = status_callback
         self._redirect_callback = redirect_callback
         self._pressure_callback = pressure_callback
         self._arrangement_callback = arrangement_callback
+        # `arrival_callback(edge, x, y)`, as the shared receiver's: the pointer came home through the
+        # Mac's return edge and was placed at desktop pixel (x, y) on `edge` of this PC, or, with
+        # edge None, input came home by a switch and the pointer is at (x, y) where it was left.
+        self._arrival_callback = arrival_callback
         self._desktop = desktop
         self._clipboard = clipboard
         self._socket_factory = socket_factory
@@ -275,7 +280,7 @@ class MacSender:
             return
         self._receiving = receiving
         if receiving and self.redirecting:
-            self.set_redirecting(False)
+            self.set_redirecting(False, came_home=False)
         self._last_point = None
         self._rearm_edge()
 
@@ -299,7 +304,7 @@ class MacSender:
     def stop(self) -> None:
         self._stop_event.set()
         self._buttons_held.clear()
-        self.set_redirecting(False)
+        self.set_redirecting(False, came_home=False)
         self._drop_connection()
         for thread in self._threads:
             thread.join(timeout=2.0)
@@ -338,7 +343,7 @@ class MacSender:
         """Whether input may still be taken from this PC. Deliberately cheap
         and lock-light: it is read on the hook thread for every keystroke and
         every mouse move, and a hook that cannot answer promptly is a hook
-        Windows removes -- with Toby's keyboard inside it."""
+        Windows removes -- with the user's keyboard inside it."""
         if self._sock is None:
             return False
         last = max(self._last_ack_at, self._connected_at)
@@ -454,8 +459,8 @@ class MacSender:
         It runs while the Mac is driving this PC too. Every move the Mac makes
         here carries INJECTED_MARK and never arrives, so what does is this
         PC's own mouse, and its push out means the pointer is going back to
-        the Mac with this mouse behind it (27-09-2026: it was ignored, and only
-        the Mac's trackpad could take the pointer back)."""
+        the Mac with this mouse behind it (ignoring this once left only the
+        Mac's trackpad able to take the pointer back)."""
         if not self.connected or self.edges_held:
             return
         if self._buttons_held and self._setting("block_while_dragging", True) and self._still_dragging():
@@ -483,7 +488,13 @@ class MacSender:
             LOGGER.exception("The way out to the Mac failed; crossing out is off until the next reconnect")
             self._edge_model = self._corner_model = None
             return
-        self._notify_pressure(model.edge, outcome.pressure, outcome.action == return_edge.CROSS)
+        part = None
+        if isinstance(model, return_edge.PartEdge):
+            part = return_edge.part_of(return_edge.display_fraction(monitors, model.edge, pointer))
+        elif isinstance(model, return_edge.CornerPush):
+            # The corner's name, so the effects play their corner forms; the glow lights the edge.
+            part = model.corner
+        self._notify_pressure(model.edge, outcome.pressure, outcome.action == return_edge.CROSS, part)
         if outcome.action == return_edge.CROSS:
             if self._receiving:
                 # The Mac's input goes home first, over its own link; its
@@ -513,11 +524,17 @@ class MacSender:
 
     # -- switching ----------------------------------------------------------
 
-    def set_redirecting(self, value, arrival_edge=None, offset=None) -> bool:
+    def set_redirecting(self, value, arrival_edge=None, offset=None, came_home=True) -> bool:
         """`arrival_edge` is the Mac edge the pointer arrives at and `offset`
         the fraction along it -- the same fraction it left this PC at, which
         is what makes one border out of two screens. Both are absent when the
-        shortcut moved input rather than a crossing."""
+        shortcut moved input rather than a crossing.
+
+        Input coming home this way is a switch -- the shortcut, the tray, the
+        direction switch or the Mac sending it back -- and is reported to the
+        arrival callback with edge None, for the arrival that shows where the
+        pointer is. `came_home` is False for the two ways back that show their
+        own: a crossing that lands here, and the Mac taking this PC over."""
         value = bool(value)
         if value == self.redirecting:
             return False
@@ -568,12 +585,23 @@ class MacSender:
             self._rearm_edge()
             self._enqueue_control(protocol.focus_msg("windows"))
             LOGGER.info("input returned to this PC")
+            if came_home:
+                self._report_switch_home()
         if self._redirect_callback is not None:
             try:
                 self._redirect_callback(value)
             except Exception:
                 LOGGER.exception("Redirect callback failed")
         return True
+
+    def _report_switch_home(self) -> None:
+        if self._arrival_callback is None:
+            return
+        try:
+            x, y = self._desktop_module().cursor_position()
+            self._arrival_callback(None, x, y)
+        except Exception:
+            LOGGER.exception("Arrival callback for a switch failed")
 
     def toggle(self) -> None:
         """The shortcut's way across and back, for when the pointer is not at
@@ -586,15 +614,25 @@ class MacSender:
         to."""
         if not isinstance(data, dict) or data.get("target") != "windows":
             return
-        self.set_redirecting(False)
         edge = data.get("edge")
         offset = data.get("offset")
-        if edge in return_edge.EDGES and isinstance(offset, (int, float)) and not isinstance(offset, bool):
+        crossed = edge in return_edge.EDGES and isinstance(offset, (int, float)) and not isinstance(offset, bool)
+        # Without an edge the Mac sent this PC's input home by its own switch: that is a switch
+        # arriving here, and shows where the pointer is.
+        self.set_redirecting(False, came_home=not crossed)
+        if crossed:
             try:
                 desktop = self._desktop_module()
-                desktop.set_cursor_position(*return_edge.arrival_position(self._cached_monitors(), edge, offset))
+                x, y = return_edge.arrival_position(self._cached_monitors(), edge, offset)
+                desktop.set_cursor_position(x, y)
             except Exception:
                 LOGGER.exception("Could not place the pointer at the %s edge on arrival", edge)
+                return
+            if self._arrival_callback is not None:
+                try:
+                    self._arrival_callback(edge, x, y)
+                except Exception:
+                    LOGGER.exception("Arrival callback failed")
 
     # -- the link -----------------------------------------------------------
 
@@ -662,6 +700,7 @@ class MacSender:
                 return False
             self._sock = sock
             self._session = session
+        self._clipboard_module().forget_sync()
         now = self._clock()
         with self._sequence_lock:
             self._last_sent_seq = 0
@@ -786,7 +825,7 @@ class MacSender:
 
     def _send_local_clipboard(self) -> None:
         try:
-            text, image = self._clipboard_module().get_contents()
+            text, image = self._clipboard_module().changed_contents()
         except Exception:
             LOGGER.exception("Failed to read the local clipboard for the Mac")
             return
@@ -962,6 +1001,8 @@ class MacSender:
             self._alert("Input returned to this PC")
         self.redirecting = False
         self._pin_point = None
+        # The model that crossed disarmed itself; without a fresh one the edge never crosses again.
+        self._rearm_edge()
         if self._redirect_callback is not None:
             try:
                 self._redirect_callback(False)
@@ -1018,7 +1059,13 @@ class MacSender:
         if self._edge is None:
             self._edge_model = self._corner_model = None
             return
-        self._edge_model = return_edge.ReturnEdge(self._edge, resistance) if "edge" in methods else None
+        if "edge" in methods:
+            self._edge_model = return_edge.ReturnEdge(self._edge, resistance)
+        elif "part" in methods:
+            parts = self._setting("crossing_edge_parts", ("middle",))
+            self._edge_model = return_edge.PartEdge(self._edge, parts, resistance)
+        else:
+            self._edge_model = None
         corner = self._setting("crossing_corner", "top_left")
         if "corner" in methods and corner in return_edge.CORNERS:
             self._corner_model = return_edge.CornerPush(corner, self._edge, resistance)
@@ -1049,10 +1096,10 @@ class MacSender:
         return int(self._setting("crossing_resistance_px", return_edge.DEFAULT_RESISTANCE_PX))
 
     def _warp_to_pin(self) -> None:
-        """Put the pointer back where it was when input left. Measured on the
-        rig, 17-09-2026: SetCursorPos produces no raw input at all -- a
-        deliberate 137-pixel warp in a quiet window produced no WM_INPUT -- so
-        the pin cannot feed itself back to the Mac as movement nobody made."""
+        """Put the pointer back where it was when input left. Measured: SetCursorPos
+        produces no raw input at all -- a deliberate 137-pixel warp in a quiet
+        window produced no WM_INPUT -- so the pin cannot feed itself back to
+        the Mac as movement nobody made."""
         pin = self._pin_point
         if pin is None:
             return
@@ -1080,11 +1127,11 @@ class MacSender:
         import clipboard_win
         return clipboard_win
 
-    def _notify_pressure(self, edge, pressure, crossed) -> None:
+    def _notify_pressure(self, edge, pressure, crossed, part=None) -> None:
         if self._pressure_callback is None:
             return
         try:
-            self._pressure_callback(edge, pressure, crossed)
+            self._pressure_callback(edge, pressure, crossed, part)
         except Exception:
             LOGGER.exception("Pressure callback failed")
 

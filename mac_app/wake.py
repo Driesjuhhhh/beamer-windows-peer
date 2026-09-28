@@ -54,11 +54,11 @@ class WakingController(KVMController):
     def can_wake(self) -> bool:
         return bool(self.cfg.mac_address) and not self.connected
 
-    def set_redirecting(self, value, edge=None, offset=None):
+    def set_redirecting(self, value, edge=None, offset=None, came_home=True):
         if value and not self.redirecting and not self.connected and self.cfg.mac_address and not self._refused():
             self.wake()
             return False
-        return super().set_redirecting(value, edge, offset)
+        return super().set_redirecting(value, edge, offset, came_home=came_home)
 
     def _refused(self) -> bool:
         """A PC that answered and refused -- the token, or the protocol version -- is awake, and
@@ -100,15 +100,15 @@ class WakingController(KVMController):
         self.logger.warning("Windows did not answer within %.0fs of the wake-on-LAN packet", WAKE_WINDOW_SECONDS)
         self._alert("Beamer", NOT_WOKEN_STATUS)
 
-    def _connect_once(self):
-        connected = super()._connect_once()
+    def _connect_once(self, host=None):
+        connected = super()._connect_once(host=host)
         if connected:
-            self._learn_mac()
+            self._learn_mac(host or self.cfg.host)
         return connected
 
-    def _learn_mac(self):
+    def _learn_mac(self, host):
         try:
-            mac = self.mac_lookup(self.cfg.host)
+            mac = self.mac_lookup(host)
         except Exception:
             self.logger.exception("hardware address lookup failed")
             return

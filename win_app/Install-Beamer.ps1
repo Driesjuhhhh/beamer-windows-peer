@@ -11,43 +11,9 @@ trap {
     break
 }
 
-# The app was called OpenKB until 19-08-2026, then Beamy until 10-09-2026. Only
-# the display name moved each time until now: this rename also moves the data
-# directory, from %LOCALAPPDATA%\OpenKB to %LOCALAPPDATA%\Beamer. app_config.py's
-# migrate_legacy_config copies the OpenKB-era config.json across on first run
-# rather than moving it, so the old directory and its config.json are never
-# touched here.
-$LegacyOpenKBDir = Join-Path $env:LOCALAPPDATA 'OpenKB'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Beamer'
 $ExeSource = Join-Path $PSScriptRoot 'dist\Beamer.exe'
 $ExeDestination = Join-Path $InstallDir 'Beamer.exe'
-
-# Everything the OpenKB name left behind, so the rename does not leave a second
-# Start Menu entry, a second logon task, a stale firewall rule for an exe that
-# no longer exists, or an OpenKB.exe that still runs alongside this one.
-$LegacyName = 'OpenKB'
-Get-Process $LegacyName -ErrorAction SilentlyContinue | Stop-Process -Force
-# Stop-Process returns before the exe is released, and deleting it straight away then fails silently.
-Get-Process $LegacyName -ErrorAction SilentlyContinue | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName $LegacyName -Confirm:$false -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $LegacyOpenKBDir "$LegacyName.exe") -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$LegacyName.lnk") -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\$LegacyName.lnk") -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path ([Environment]::GetFolderPath('Desktop')) "$LegacyName.lnk") -Force -ErrorAction SilentlyContinue
-# A rule named plain OpenKB also survived on the rig until 15-09-2026: TCP 51820 for any program on
-# every profile, Public included.
-Get-NetFirewallRule -DisplayName "$LegacyName Receiver (TCP-In)", $LegacyName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-
-# Everything the Beamy name left behind. Its data directory was never its own --
-# it shared OpenKB's, so Beamy.exe there is removed but config.json stays; it is
-# still what migrate_legacy_config reads from.
-Get-Process 'Beamy' -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process 'Beamy' -ErrorAction SilentlyContinue | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $LegacyOpenKBDir 'Beamy.exe') -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Beamy.lnk') -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Beamy.lnk') -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Beamy.lnk') -Force -ErrorAction SilentlyContinue
-Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Beamy' -ErrorAction SilentlyContinue
 
 # Beamer.exe now carries a requireAdministrator manifest (build.spec uac_admin=True) so
 # SendInput can reach elevated windows, e.g. an admin terminal, which UIPI otherwise
@@ -60,8 +26,8 @@ if (-not (Test-Path $ExeSource)) { throw 'The Windows build did not produce Beam
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Get-Process 'Beamer' -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process 'Beamer' -ErrorAction SilentlyContinue | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-# The exe can stay locked for a moment after the process has gone (23-09-2026: the copy failed
-# with "being used by another process" straight after Wait-Process returned, and worked on a rerun).
+# The exe can stay locked for a moment after the process has gone: the copy can fail with
+# "being used by another process" straight after Wait-Process returns, and succeed on a rerun.
 for ($attempt = 1; ; $attempt++) {
     try {
         Copy-Item -Path $ExeSource -Destination $ExeDestination -Force -ErrorAction Stop
@@ -95,13 +61,8 @@ Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' 
 
 if ($IsElevated) {
     # Start at logon belongs to the app: the switch on its Overview page writes and removes the
-    # Beamer task, and the installer never does, on install or reinstall. A Beamy task is removed,
-    # since it starts an exe that no longer exists.
-    Unregister-ScheduledTask -TaskName 'Beamy' -Confirm:$false -ErrorAction SilentlyContinue
-
+    # Beamer task, and the installer never does, on install or reinstall.
     try {
-        Get-NetFirewallRule -DisplayName 'Beamy Receiver (TCP-In)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-        Get-NetFirewallRule -DisplayName 'Beamy Pairing (UDP-In)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
         Get-NetFirewallRule -DisplayName 'Beamer Receiver (TCP-In)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
         # 24820 and 24821, not the old 51820/51821: those sat inside the 49152-65535 range
         # Windows hands out for itself, and a WinNAT reservation landing on the receiver's port

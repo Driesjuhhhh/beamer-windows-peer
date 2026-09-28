@@ -707,13 +707,14 @@ class ReceiverCrossingTests(unittest.TestCase):
 
     MONITORS = [Rect(0, 0, 2560, 1440), Rect(-1920, 200, 1920, 1080)]
 
-    def _session(self, desktop, pressures=None):
+    def _session(self, desktop, pressures=None, arrivals=None):
         statuses = []
         server = ReceiverServer(
             lambda state, detail: statuses.append((state, detail)),
             clipboard=FakeClipboard(text=""),
             desktop=desktop,
             pressure_callback=None if pressures is None else (lambda *args: pressures.append(args)),
+            arrival_callback=None if arrivals is None else (lambda *args: arrivals.append(args)),
         )
         client, connection, address = connected_socket_pair()
         stop_event = threading.Event()
@@ -748,15 +749,29 @@ class ReceiverCrossingTests(unittest.TestCase):
         finally:
             self._teardown(client, connection, stop_event, thread)
 
+    def test_arrival_callback_gets_the_edge_and_where_the_pointer_landed(self):
+        desktop = FakeDesktop(self.MONITORS, cursor=(500, 500))
+        arrivals = []
+        server, client, connection, stop_event, thread = self._session(desktop, arrivals=arrivals)
+        try:
+            client.send(self._focus_windows(edge="left", offset=0.5, return_edge="left", resistance_px=100))
+            wait_for_calls(arrivals, minimum=1)
+            self.assertEqual(arrivals, [("left", -1920, 720)])
+        finally:
+            self._teardown(client, connection, stop_event, thread)
+
     def test_shortcut_switch_arms_without_moving_the_pointer(self):
         desktop = FakeDesktop(self.MONITORS, cursor=(500, 500))
-        server, client, connection, stop_event, thread = self._session(desktop)
+        arrivals = []
+        server, client, connection, stop_event, thread = self._session(desktop, arrivals=arrivals)
         try:
             client.send(self._focus_windows(return_edge="top", resistance_px=120))
             client.send(protocol.ping_msg())
             client.settimeout(1.0)
             self.assertEqual(client.recv(), protocol.ack_msg(0))
             self.assertEqual(desktop.set_calls, [])
+            # A switch, reported with no edge and wherever the pointer was left, to show where it is.
+            self.assertEqual(arrivals, [(None, 500, 500)])
             self.assertEqual(server.return_edge, "top")
         finally:
             self._teardown(client, connection, stop_event, thread)
@@ -779,15 +794,130 @@ class ReceiverCrossingTests(unittest.TestCase):
                 self.assertEqual(desktop.set_calls, [(-1920, 723)])
                 inject.assert_not_called()
                 # The receiver sends the switch before it reports the breakthrough pressure, so
-                # the second entry can land after recv() returns: 2 in 15 runs failed on the rig.
+                # the second entry can land after recv() returns: this was flaky without the wait.
                 wait_for_calls(pressures, minimum=2)
-                self.assertEqual([edge for edge, _, _ in pressures], ["left", "left"])
+                self.assertEqual([entry[0] for entry in pressures], ["left", "left"])
                 self.assertAlmostEqual(pressures[0][1], 0.6)
-                self.assertEqual(pressures[1][1:], (1.0, True))
+                self.assertEqual(pressures[1][1:], (1.0, True, None))
                 # Disarmed after the crossing: the next move injects normally.
                 client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
                 wait_for_calls(inject.call_args_list, minimum=1)
                 inject.assert_called_once_with(-60, 0)
+            finally:
+                self._teardown(client, connection, stop_event, thread)
+
+    def test_pause_on_this_machine_holds_the_way_home_too(self):
+        desktop = FakeDesktop(self.MONITORS, cursor=(-1920, 720))
+        with mock.patch.object(receiver, "ACK_IDLE_SECONDS", 1000.0), mock.patch.object(
+            input_injector, "inject_mouse_move"
+        ) as inject:
+            server, client, connection, stop_event, thread = self._session(desktop)
+            server.edges_held = lambda: True
+            try:
+                client.send(self._focus_windows(return_edge="left", resistance_px=100))
+                for _ in range(4):
+                    client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                wait_for_calls(inject.call_args_list, minimum=4)
+                # Every push went through as an ordinary move; nothing was held or sent home.
+                self.assertEqual(desktop.set_calls, [])
+                self.assertTrue(server._return_edge.armed)
+            finally:
+                self._teardown(client, connection, stop_event, thread)
+
+    def test_the_way_home_follows_this_machines_own_thirds(self):
+        # This PC has Part of the edge with only the top third: a push lower down is a wall.
+        desktop = FakeDesktop(self.MONITORS, cursor=(-1920, 1100))
+        pressures = []
+        with mock.patch.object(receiver, "ACK_IDLE_SECONDS", 1000.0), mock.patch.object(
+            input_injector, "inject_mouse_move"
+        ) as inject:
+            server, client, connection, stop_event, thread = self._session(desktop, pressures)
+            server.return_model = lambda edge, resistance: receiver.crossing.PartEdge(edge, ("start",), resistance)
+            try:
+                client.send(self._focus_windows(return_edge="left", resistance_px=100))
+                for _ in range(3):
+                    client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                wait_for_calls(inject.call_args_list, minimum=3)
+                self.assertEqual(pressures, [])
+                desktop.cursor = (-1920, 300)
+                client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                client.settimeout(1.0)
+                self.assertEqual(client.recv()["type"], protocol.MSG_SWITCH)
+                wait_for_calls(pressures, minimum=1)
+                self.assertEqual(pressures[0][3], "start")
+            finally:
+                self._teardown(client, connection, stop_event, thread)
+
+    def test_a_crossing_setting_changed_mid_visit_applies_at_once(self):
+        # Toby, 28-09-2026: a change to Part of the edge applied only after crossing out and back.
+        desktop = FakeDesktop(self.MONITORS, cursor=(-1920, 1100))
+        settings = {"parts": ("start",)}
+        with mock.patch.object(receiver, "ACK_IDLE_SECONDS", 1000.0), mock.patch.object(
+            input_injector, "inject_mouse_move"
+        ) as inject:
+            server, client, connection, stop_event, thread = self._session(desktop, [])
+            server.return_model = lambda edge, resistance: receiver.crossing.PartEdge(edge, settings["parts"], resistance)
+            # Both apps pass one; it is what records that the peer is driving.
+            server._focus_callback = lambda target: None
+            try:
+                client.send(self._focus_windows(return_edge="left", resistance_px=100))
+                client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                wait_for_calls(inject.call_args_list, minimum=1)
+                self.assertEqual(server._return_edge.parts, frozenset({"start"}))
+                settings["parts"] = ("end",)
+                server.rearm_return()
+                self.assertEqual(server._return_edge.parts, frozenset({"end"}))
+                self.assertEqual((server.return_edge, server.return_resistance), ("left", 100))
+            finally:
+                self._teardown(client, connection, stop_event, thread)
+
+    def test_rearming_does_nothing_once_input_has_gone_home(self):
+        server = receiver.ReceiverServer(lambda *args: None)
+        server.return_model = lambda edge, resistance: receiver.crossing.ReturnEdge(edge, resistance)
+        server.rearm_return()
+        self.assertIsNone(server._return_edge)
+
+    def test_rearming_never_revives_a_way_home_that_was_handed_back(self):
+        # Codex on 74e8e96: send_home drops the way home while the peer still counts as driving,
+        # until its focus arrives; a settings save in between must not arm it again.
+        server = receiver.ReceiverServer(lambda *args: None, focus_callback=lambda target: None)
+        server.return_model = lambda edge, resistance: receiver.crossing.ReturnEdge(edge, resistance)
+        server._notify_focus(server._self_target)
+        server._arm_return({"return_edge": "left", "resistance_px": 100})
+        server._drop_return()
+        server.rearm_return()
+        self.assertIsNone(server._return_edge)
+
+    def test_rearming_never_revives_a_way_home_already_pushed_through(self):
+        desktop = FakeDesktop(self.MONITORS, cursor=(-1920, 300))
+        with mock.patch.object(receiver, "ACK_IDLE_SECONDS", 1000.0), mock.patch.object(input_injector, "inject_mouse_move"):
+            server, client, connection, stop_event, thread = self._session(desktop, [])
+            server.return_model = lambda edge, resistance: receiver.crossing.ReturnEdge(edge, resistance)
+            server._focus_callback = lambda target: None
+            try:
+                client.send(self._focus_windows(return_edge="left", resistance_px=100))
+                client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                client.settimeout(1.0)
+                self.assertEqual(client.recv()["type"], protocol.MSG_SWITCH)
+                server.rearm_return()
+                self.assertFalse(server._return_edge is not None and server._return_edge.armed)
+            finally:
+                self._teardown(client, connection, stop_event, thread)
+
+    def test_no_way_home_by_the_pointer_when_this_machine_has_none(self):
+        desktop = FakeDesktop(self.MONITORS, cursor=(-1920, 720))
+        with mock.patch.object(input_injector, "inject_mouse_move") as inject:
+            server, client, connection, stop_event, thread = self._session(desktop)
+            server.return_model = lambda edge, resistance: None
+            try:
+                client.send(self._focus_windows(return_edge="left", resistance_px=100))
+                for _ in range(4):
+                    client.send({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": -60, "dy": 0}})
+                wait_for_calls(inject.call_args_list, minimum=4)
+                self.assertIsNone(server.return_edge)
+                self.assertEqual(desktop.set_calls, [])
             finally:
                 self._teardown(client, connection, stop_event, thread)
 
@@ -806,8 +936,8 @@ class ReceiverCrossingTests(unittest.TestCase):
 class ReceiverHandBackTests(unittest.TestCase):
     """The peer's input is here and the link that brought it ends. The peer
     fails open on its own side, but the focus saying so dies with the socket,
-    so the receiver raises it: otherwise the owner keeps treating the peer as
-    driving and its own edge and shortcut stay dead."""
+    so the receiver raises it: otherwise this machine keeps treating the peer
+    as driving and its own edge and shortcut stay dead."""
 
     def _session(self, focuses):
         server = ReceiverServer(
@@ -846,7 +976,7 @@ class ReceiverHandBackTests(unittest.TestCase):
             connection.close()
 
     def test_send_home_while_driving_sends_the_peer_its_input(self):
-        # The escape that does not depend on the return edge: 23-09-2026, the
+        # The escape that does not depend on the return edge: without it, the
         # PC's mouse stayed on the Mac after a push through the edge never fired.
         focuses = []
         server, client, connection, thread = self._session(focuses)
@@ -979,6 +1109,34 @@ class ReceiverBindTests(unittest.TestCase):
             server.start(make_config(port=port))
             _, detail = wait_for_status(statuses, ServerState.ERROR, timeout=2.0)
             self.assertIn(f"port {port}", detail)
+
+
+
+class InputScaleTests(unittest.TestCase):
+    def test_a_slower_pointer_carries_its_fractions(self):
+        scale = receiver.InputScale(pointer=0.5)
+        moves = [scale.move(1, 1) for _ in range(4)]
+        self.assertEqual(moves, [(0, 0), (1, 1), (0, 0), (1, 1)])
+
+    def test_a_faster_pointer_multiplies(self):
+        self.assertEqual(receiver.InputScale(pointer=2.0).move(3, -4), (6, -8))
+
+    def test_speeds_are_held_to_their_range(self):
+        scale = receiver.InputScale(pointer=99, scroll=0)
+        self.assertEqual((scale.pointer, scale.scroll), (4.0, 0.25))
+
+    def test_scroll_speed_and_reverse(self):
+        self.assertEqual(receiver.InputScale(scroll=2.0).wheel(3, 1), (6.0, 2.0))
+        self.assertEqual(receiver.InputScale(reverse=True).wheel(3, -1), (-3.0, 1.0))
+        self.assertEqual(receiver.InputScale().wheel(3, 1), (3, 1))
+
+    def test_handle_message_applies_the_scale_and_drops_a_move_that_rounds_to_nothing(self):
+        injector = FakeInjector()
+        scale = receiver.InputScale(pointer=0.5)
+        handle_message({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": 1, "dy": 0}}, injector, scale)
+        handle_message({"type": protocol.MSG_MOUSEMOVE, "data": {"dx": 1, "dy": 0}}, injector, scale)
+        handle_message({"type": protocol.MSG_SCROLL, "data": {"dy": 2, "dx": 0}}, injector, receiver.InputScale(reverse=True))
+        self.assertEqual(injector.calls, [("mouse_move", (1, 0)), ("scroll", (-2.0, -0.0, "line"))])
 
 
 if __name__ == "__main__":

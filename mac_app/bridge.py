@@ -8,6 +8,7 @@ import struct
 import threading
 import time
 import types
+import dataclasses
 from dataclasses import dataclass
 
 import objc
@@ -544,6 +545,13 @@ class KVMController:
         # range needs NSScreen, so the app measures it on the main thread and
         # assigns it here. on_crossing is fed (kind, step) off the tap and
         # ack threads for haptics and the glow; the app marshals it.
+        # A PC whose address changed, after a router restart hands it a new lease, still beacons
+        # under its name. With `discovery` set, a failed connect tries the address the paired PC's
+        # name is heard at, and only once that address has passed the authenticated handshake does
+        # it become cfg.host and reach `on_host_learned(host)` on the connection thread, for the app
+        # to save. A spoofed beacon costs one failed attempt and changes nothing.
+        self.discovery = None
+        self.on_host_learned = None
         self.crossing = crossing.CrossingEngine.from_config(cfg.crossing)
         self.desktop_bounds = desktop_bounds or self._default_desktop_bounds
         self.notch_range = None
@@ -552,6 +560,8 @@ class KVMController:
         self._crossing_failed_at = 0.0
         self._bounds_cache = None
         self._bounds_at = 0.0
+        self._displays_cache = None
+        self._displays_at = 0.0
         # Both hold the pointer methods off while the shortcut keeps working. Paused is the
         # person's own choice from the menu and deliberately not a setting, so a pause nobody
         # remembers cannot survive a restart; full_screen_app is the name of the frontmost app
@@ -692,10 +702,16 @@ class KVMController:
         self.crossing = crossing.CrossingEngine.from_config(cfg.crossing)
         self._crossing_failed = False
 
-    def set_redirecting(self, value, edge=None, offset=None):
+    def set_redirecting(self, value, edge=None, offset=None, came_home=True):
         """`edge` and `offset` are the Windows edge and fraction along it a
         crossing arrives at; absent for the shortcut, when Windows leaves its
-        pointer where it is. The way home is sent on every switch."""
+        pointer where it is. The way home is sent on every switch.
+
+        Input coming home this way is a switch, the shortcut, the menu or the
+        PC sending it back, and says so through on_crossing as "home" with
+        where the pointer is, for the arrival that shows it. `came_home` is
+        False for the two ways back that show their own: a crossing that lands
+        here, and the PC taking this Mac over."""
         value = bool(value)
         if value == self.redirecting:
             return False
@@ -744,6 +760,10 @@ class KVMController:
             return True
         self._return_local()
         self.logger.info("input returned to this Mac")
+        if came_home:
+            pin = self._capture_cursor_pin_point()
+            if pin is not None:
+                self._notify_crossing("home", crossing.Step(pin=(pin[0], pin[1])))
         return True
 
     def _return_local(self):
@@ -776,7 +796,7 @@ class KVMController:
         if value == self.receiving:
             return
         if value and self.redirecting:
-            self.set_redirecting(False)
+            self.set_redirecting(False, came_home=False)
         self.receiving = value
         self.crossing.reset()
 
@@ -1092,6 +1112,9 @@ class KVMController:
                 self.clock(),
                 notch_range=self.notch_range,
                 dragging=event_type != quartz.kCGEventMouseMoved,
+                # Each display's own edges count where nothing lies beyond them, and Part of the
+                # edge measures its thirds along the pointer's display.
+                displays=self._current_displays(),
             )
         except Exception:
             self._crossing_failed = True
@@ -1104,7 +1127,6 @@ class KVMController:
                 # The PC is driving this Mac and this Mac's own pointer pushed through: the PC's
                 # input goes home first, over its own link, and this Mac's follows it across. The
                 # PC's focus home clears receiving here too, later, and finds it already clear.
-                # The Mac half of the PC's own push back (27-09-2026).
                 send_home = self.send_peer_home
                 if send_home is None or not send_home():
                     self.logger.warning("cannot cross: Windows is driving this Mac and cannot be reached")
@@ -1128,6 +1150,22 @@ class KVMController:
             self._bounds_cache = self.desktop_bounds()
             self._bounds_at = now
         return self._bounds_cache
+
+    def _current_displays(self):
+        now = self.clock()
+        if self._displays_cache is None or now - self._displays_at > DESKTOP_BOUNDS_MAX_AGE_SECONDS:
+            quartz = self.quartz
+            try:
+                displays = [
+                    (rect.origin.x, rect.origin.y, rect.origin.x + rect.size.width, rect.origin.y + rect.size.height)
+                    for rect in (quartz.CGDisplayBounds(display) for display in desktop_mac.display_ids(quartz))
+                ]
+            except Exception:
+                # Without them the engine measures against the whole desktop, as it always could.
+                return None
+            self._displays_cache = displays or None
+            self._displays_at = now
+        return self._displays_cache
 
     def _default_desktop_bounds(self):
         quartz = self.quartz
@@ -1174,17 +1212,23 @@ class KVMController:
         genuinely came home."""
         if not isinstance(data, dict) or data.get("target") != "mac":
             return
-        self.set_redirecting(False)
         edge = data.get("edge")
         offset = data.get("offset")
-        if edge in crossing.EDGES and isinstance(offset, (int, float)) and not isinstance(offset, bool):
+        crossed = edge in crossing.EDGES and isinstance(offset, (int, float)) and not isinstance(offset, bool)
+        # Without an edge the PC sent this Mac's input home by its own switch: that is a switch
+        # arriving here, and shows where the pointer is.
+        self.set_redirecting(False, came_home=not crossed)
+        point = None
+        if crossed:
             try:
-                point = crossing.CrossingEngine.arrival_point(edge, offset, self._current_desktop_bounds())
+                point = crossing.CrossingEngine.arrival_point(
+                    edge, offset, self._current_desktop_bounds(), displays=self._current_displays())
             except Exception:
                 self.logger.exception("failed to place the pointer on arrival")
             else:
                 self._warp_cursor_to(point)
-        self._notify_crossing("arrive", crossing.Step(mac_edge=edge if edge in crossing.EDGES else None))
+        # `pin` is where the pointer landed, for the arrival effect; None when it was not placed.
+        self._notify_crossing("arrive", crossing.Step(mac_edge=edge if edge in crossing.EDGES else None, pin=point))
 
     def _handle_system_event(self, event):
         """Forward a media/volume key press. Anything that is not one --
@@ -1342,32 +1386,53 @@ class KVMController:
     def _connection_worker(self):
         while not self.stop_event.is_set():
             if not self.connected and self._config_ready():
-                self._connect_once()
+                if not self._connect_once():
+                    self._follow_the_pc()
             self.stop_event.wait(self.cfg.reconnect_interval_s)
+
+    def _follow_the_pc(self):
+        """Try the address the paired PC is beaconing from now, if it is not the saved one."""
+        discovery, cfg = self.discovery, self.cfg
+        if discovery is None or not cfg.pc_name:
+            return
+        moved = next((pc["address"] for pc in discovery.pcs()
+                      if pc["name"] == cfg.pc_name and pc["port"] == cfg.port and pc["address"] != cfg.host), None)
+        if moved is None or not self._connect_once(host=moved):
+            return
+        self.logger.info("%s moved from %s to %s", cfg.pc_name, cfg.host, moved)
+        self.cfg = dataclasses.replace(self.cfg, host=moved)
+        if self.on_host_learned is not None:
+            try:
+                self.on_host_learned(moved)
+            except Exception:
+                self.logger.exception("saving the PC's new address failed")
 
     def _config_ready(self):
         return bool(self.cfg.host and self.cfg.auth_token and 1 <= self.cfg.port <= 65535)
 
-    def _connect_once(self):
+    def _connect_once(self, host=None):
         sock = None
         fallback = False
         # Read once: update_config can replace self.cfg from the AppKit thread mid-handshake.
-        endpoint = (self.cfg.host, self.cfg.port, self.cfg.auth_token)
-        self.connection_status = f"Connecting to {self.cfg.host}:{self.cfg.port}"
+        endpoint = (host or self.cfg.host, self.cfg.port, self.cfg.auth_token)
+        # The tunnel leads to the saved address, so a new one is tried directly or not at all.
+        tunnel_allowed = host is None
+        host, port = endpoint[0], endpoint[1]
+        self.connection_status = f"Connecting to {host}:{port}"
         try:
             try:
                 sock = self.socket_factory(
-                    (self.cfg.host, self.cfg.port),
+                    (host, port),
                     timeout=CONNECT_TIMEOUT_SECONDS,
                 )
             except OSError as exc:
-                if exc.errno != errno.EHOSTUNREACH:
+                if exc.errno != errno.EHOSTUNREACH or not tunnel_allowed:
                     raise
                 sock = self._connect_via_ssh_fallback()
                 fallback = True
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            session = protocol.SecureSession(self.cfg.auth_token)
+            session = protocol.SecureSession(endpoint[2])
             sock.sendall(session.preamble())
             sock.settimeout(AUTH_TIMEOUT_SECONDS)
             try:
@@ -1452,6 +1517,7 @@ class KVMController:
                 return False
             self.sock = sock
             self.session = session
+        self.clipboard.forget_sync()
         now = self.clock()
         with self.sequence_lock:
             self.last_ack_seq = -1
@@ -1463,8 +1529,8 @@ class KVMController:
             self.connection_status = "Connected to Windows via secure macOS 27 fallback"
             self.logger.info("connected to Windows through the SSH fallback")
         else:
-            self.connection_status = f"Connected to {self.cfg.host}:{self.cfg.port}"
-            self.logger.info("connected to Windows at %s:%s", self.cfg.host, self.cfg.port)
+            self.connection_status = f"Connected to {host}:{port}"
+            self.logger.info("connected to Windows at %s:%s", host, port)
         return True
 
     def _connect_via_ssh_fallback(self):
@@ -1517,11 +1583,12 @@ class KVMController:
 
     def _send_local_clipboard(self):
         """Expand the local-clipboard sentinel: read this Mac's clipboard and
-        send it as a clipboard message. Text over CLIPBOARD_MAX_BYTES and an
+        send it as a clipboard message, unless it is unchanged since it was
+        last sent or written from the PC. Text over CLIPBOARD_MAX_BYTES and an
         image over CLIPBOARD_IMAGE_MAX_BYTES are each dropped on their own,
         so an oversized screenshot still lets its text through; with nothing
         left the message is skipped and the focus message still goes out."""
-        text, image = self.clipboard.get_contents()
+        text, image = self.clipboard.changed_contents()
         if text and len(text.encode("utf-8")) > protocol.CLIPBOARD_MAX_BYTES:
             self.logger.warning("local clipboard text is too large; skipping the text")
             text = None
@@ -1533,7 +1600,7 @@ class KVMController:
             )
             image = None
         if not text and image is None:
-            self.logger.debug("local clipboard is empty; skipping clipboard sync")
+            self.logger.debug("local clipboard is empty or unchanged since the last sync; not sending it")
             return
         self._send_raw(protocol.clipboard_msg(text or None, image))
 

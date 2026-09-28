@@ -2,8 +2,7 @@
 
 Two numberings share the values 29-32 and must not be confused:
 
-At the CGEvent tap (bridge.py), measured on macOS 26.6.2 and documented in
-docs/gestures-scope-06-09-2026.md:
+At the CGEvent tap (bridge.py), measured on macOS 26.6.2:
 
     29  Gesture      -- everything two-finger, discriminated by field 110
     30  DockControl  -- a three/four-finger system swipe or thumb-and-three

@@ -1,15 +1,18 @@
-"""Beamer's design tokens: the Vernier direction, chosen 10-09-2026.
+"""Beamer's design tokens: the Vernier direction.
 
-The mock is docs/designs/claude-2-vernier.html and its reasoning docs/designs/claude-2-vernier-notes.md.
 This file is the one home for every colour, size, face and spring both apps draw with. The Mac app
 reads it through the root theme.py; win_app/tokens.py is a byte-identical copy because PyInstaller
 only bundles what sits under the app, and win_app's tests fail if the two drift. Edit this one, then
 copy it across.
 
-Dark only. `signal` is the one colour that means something is happening: the link is up, input is on
-Windows, pressure is building, a permission is granted. The mock used lime; it was swapped for
-cockpit cyan at build time because lime on near-black is the stock developer-tool look, and B612
-Mono is a cockpit face. Reverting is this one value and `signal_dim`.
+`signal` is the one colour that means something is happening: the link is up, input is on Windows,
+pressure is building, a permission is granted. The mock used lime; it was swapped for cockpit cyan
+at build time because lime on near-black is the stock developer-tool look, and B612 Mono is a
+cockpit face. Reverting is this one value and `signal_dim`, in both palettes.
+
+PALETTE is the dark settings window and PALETTE_LIGHT the light one, the same names in the same
+roles, chosen by the `appearance` setting. The crossing effects and PALETTES take the dark `signal`
+whatever the window shows: they draw on the desktop, not on the window.
 """
 
 PALETTE = {
@@ -31,6 +34,31 @@ PALETTE = {
 # Measured WCAG ratios, for whoever changes a value: ink on panel 15.5, ink_2 on panel 8.4, ink_3 on
 # panel 5.5, edge on panel 3.5 (control boundaries), signal on panel 10.4, ground on signal 11.1,
 # amber on panel 9.8, fault on panel 7.1.
+
+# Paper rather than the dark palette turned over: modules are lighter than the window, as in the dark
+# one, so a module still lifts off the ground and a well still sets a control apart from its module.
+# signal keeps its hue but drops to a depth that carries text on paper and a ground-coloured glyph on
+# itself. Measured WCAG ratios: ink on panel 16.4, ink_2 on panel 9.1 and on well 7.5, ink_3 on
+# panel 5.6 and on well 4.6, edge on panel 3.9 and on well 3.2, signal on panel 5.9 and on ground 5.4,
+# ground on signal 5.4, ink on signal_dim 12.3, amber on panel 5.4, fault on panel 5.8.
+PALETTE_LIGHT = {
+    "ground": "#f1f0ea",
+    "panel": "#fbfaf6",
+    "well": "#e5e4dc",
+    "rule": "#dcdbd3",
+    "edge": "#7f7e74",
+    "ink": "#1b1c18",
+    "ink_2": "#46463f",
+    "ink_3": "#66655c",
+    "signal": "#006a88",
+    "signal_dim": "#bfe0ea",
+    "amber": "#8f5c00",
+    "fault": "#b53522",
+    "off": "#aeada3",
+}
+
+# The `appearance` setting on both apps: follow the system, or keep one palette.
+APPEARANCES = ("system", "light", "dark")
 
 UI_FAMILY = "Hanken Grotesk"
 MONO_FAMILY = "B612 Mono"

@@ -168,7 +168,7 @@ class FakeDockFields:
 
 
 class DockSwipeClassifierTests(unittest.TestCase):
-    """Signs as measured on macOS 26.6.2 (docs/gestures-scope-06-09-2026.md)."""
+    """Signs as measured on macOS 26.6.2."""
 
     def setUp(self):
         self.classifier = DockSwipeClassifier(macos_major=26)

@@ -21,6 +21,18 @@ DECAY_SECONDS = 0.4
 # 8 pixels, and the two boundaries are meant to feel like one.
 CORNER_PX = 8
 CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
+# The thirds of an edge "Part of the edge" may use, top to bottom or left to right. Both machines'
+# engines read them through in_parts, so a third means the same stretch on each.
+PARTS = ("start", "middle", "end")
+
+
+def part_of(fraction: float) -> str:
+    """Which third of an edge `fraction` of the way along it falls in."""
+    return PARTS[min(2, max(0, int(fraction * 3)))]
+
+
+def in_parts(fraction: float, parts) -> bool:
+    return part_of(fraction) in parts
 
 PASS = "pass"
 HOLD = "hold"
@@ -78,6 +90,14 @@ def edge_offset(bounds: Rect, edge: str, pointer: Tuple[int, int]) -> float:
     return _clamp((pointer[0] - bounds.x) / max(bounds.width, 1), 0.0, 1.0)
 
 
+def display_fraction(monitors: List[Rect], edge: str, pointer: Tuple[int, int]) -> float:
+    """Fraction along `edge` of the display the pointer is on, which is how Part of the edge
+    measures its thirds: against the bounding box, a short display beside a tall one could hold
+    none of the middle third. The bounding box when the pointer is on no display."""
+    home = next((m for m in monitors if _contains(m, pointer)), None) or union(monitors)
+    return edge_offset(home, edge, pointer)
+
+
 def owning_monitor(monitors: List[Rect], edge: str) -> Rect:
     """The monitor that reaches the bounding box on `edge`; ties go to the
     first enumerated, which on Windows is the primary."""
@@ -90,19 +110,40 @@ def owning_monitor(monitors: List[Rect], edge: str) -> Rect:
     return max(monitors, key=lambda r: r.bottom)
 
 
+def landing_monitor(monitors: List[Rect], edge: str, along: float) -> Rect:
+    """The monitor a pointer arriving through `edge` at coordinate `along` (y for a side edge, x
+    for the top or bottom) lands on: of those spanning `along`, the outermost on that edge, so two
+    stacked monitors each take their own stretch of it; with none spanning it, a gap in a staggered
+    arrangement, the nearest. Ties go to the first enumerated, which on Windows is the primary."""
+    def span(r: Rect):
+        return (r.y, r.bottom) if edge in ("left", "right") else (r.x, r.right)
+
+    def outer(r: Rect):
+        return {"left": r.x, "right": -r.right, "top": r.y, "bottom": -r.bottom}[edge]
+
+    def distance(r: Rect):
+        low, high = span(r)
+        return max(low - along, along - (high - 1), 0)
+
+    return min(monitors, key=lambda r: (distance(r), outer(r)))
+
+
 def arrival_position(monitors: List[Rect], edge: str, offset: float) -> Tuple[int, int]:
-    """Where a pointer arriving at `edge`, `offset` of the way along it, lands.
-    The fraction is applied against the whole bounding box, then clamped into
-    the owning monitor so a staggered arrangement never lands it in a gap."""
+    """Where a pointer arriving at `edge`, `offset` of the way along it, lands. The fraction is
+    applied against the whole bounding box, then placed on the monitor `landing_monitor` picks, so
+    no arrangement lands it in a gap or on the wrong one of two monitors sharing the edge."""
     bounds = union(monitors)
-    owner = owning_monitor(monitors, edge)
     offset = _clamp(float(offset), 0.0, 1.0)
     if edge in ("left", "right"):
+        along = int(round(bounds.y + offset * bounds.height))
+        owner = landing_monitor(monitors, edge, along)
         x = owner.x if edge == "left" else owner.right
-        y = _clamp(int(round(bounds.y + offset * bounds.height)), owner.y, owner.bottom)
+        y = _clamp(along, owner.y, owner.bottom)
     else:
+        along = int(round(bounds.x + offset * bounds.width))
+        owner = landing_monitor(monitors, edge, along)
         y = owner.y if edge == "top" else owner.bottom
-        x = _clamp(int(round(bounds.x + offset * bounds.width)), owner.x, owner.right)
+        x = _clamp(along, owner.x, owner.right)
     return x, y
 
 
@@ -144,9 +185,9 @@ class ReturnEdge:
     def _at_edge(self, monitors: List[Rect], pointer: Tuple[int, int]) -> bool:
         """On a monitor, with no monitor one pixel beyond it: the pointer is
         against a wall. Testing the bounding box instead made the edge of a
-        shorter monitor in a staggered arrangement unreachable — on the rig,
-        pushing down on the LG, whose bottom stops 204px above the ultrawide's,
-        never went home."""
+        shorter monitor in a staggered arrangement unreachable — for example,
+        pushing down on a monitor whose bottom stops above its neighbour's
+        could never reach the edge."""
         x, y = pointer
         step_x, step_y = {"left": (-1, 0), "right": (1, 0), "top": (0, -1), "bottom": (0, 1)}[self.edge]
         beyond = (x + step_x, y + step_y)
@@ -180,6 +221,35 @@ class ReturnEdge:
         else:
             position = (_clamp(int(x + dx), bounds.x, bounds.right), y)
         return Outcome(HOLD, self.pressure, position=position)
+
+
+class PartEdge(ReturnEdge):
+    """The edge, but only along the chosen thirds of it: the rest of the edge is a plain wall, so
+    a menu or a dock at one end can sit against it without the pointer ever crossing there. The
+    thirds are measured along the display the pointer is on, by `display_fraction`."""
+
+    def __init__(self, edge: str, parts, resistance_px: int = DEFAULT_RESISTANCE_PX, clock=time.monotonic) -> None:
+        super().__init__(edge, resistance_px, clock)
+        self.parts = frozenset(part for part in parts if part in PARTS)
+
+    def _at_edge(self, monitors: List[Rect], pointer: Tuple[int, int]) -> bool:
+        return super()._at_edge(monitors, pointer) and in_parts(display_fraction(monitors, self.edge, pointer), self.parts)
+
+
+class SpanEdge(ReturnEdge):
+    """The edge, but only along a stretch of it, in the monitors' own coordinates: a Mac's notch,
+    a fixed stretch of its top edge rather than a third of it. `span()` gives (start, end) or None
+    and is read at every push, so a stretch measured late, or moved by a display change, applies
+    at once."""
+
+    def __init__(self, edge: str, span: Callable[[], Optional[Tuple[float, float]]], resistance_px: int = DEFAULT_RESISTANCE_PX, clock=time.monotonic) -> None:
+        super().__init__(edge, resistance_px, clock)
+        self.span = span
+
+    def _at_edge(self, monitors: List[Rect], pointer: Tuple[int, int]) -> bool:
+        span = self.span()
+        along = pointer[0] if self.edge in ("top", "bottom") else pointer[1]
+        return span is not None and super()._at_edge(monitors, pointer) and span[0] <= along <= span[1]
 
 
 class CornerPush(ReturnEdge):

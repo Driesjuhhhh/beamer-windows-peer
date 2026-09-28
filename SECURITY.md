@@ -18,7 +18,9 @@ them matters. This is what it protects, what it does not, and how to report a pr
   at the PC to press Pair a Mac again.
 - **Traffic stays on your network.** The two machines talk to each other directly. There is no
   server, no account and no telemetry. On Windows, the firewall rules Beamer adds apply to Private
-  networks only.
+  networks only. The one request that leaves your network is the update check: once a day, an
+  ordinary HTTPS request to GitHub's public releases API, carrying nothing about you or your
+  machines beyond the address any request comes from. Check for updates on Overview turns it off.
 - **Strangers cannot tie it up cheaply.** A connection must authenticate within a deadline and
   within 4KB, and only a handful of unauthenticated connections are held at once.
 

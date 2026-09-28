@@ -237,6 +237,12 @@ class FakeClipboard:
     def get_contents(self):
         return self.text, self.image
 
+    def changed_contents(self):
+        return self.text, self.image
+
+    def forget_sync(self):
+        pass
+
     def set_contents(self, text, image):
         self.set_calls.append((text, image))
         return True
@@ -692,7 +698,7 @@ class ControllerTests(unittest.TestCase):
         )
 
     def test_switching_while_receiving_sends_the_pcs_input_home(self):
-        # 23-09-2026: the PC's mouse was on this Mac, its push back through
+        # Seen in practice: the PC's mouse was on this Mac, its push back through
         # the edge never fired, and the menu's switch only said Windows was
         # already driving. Switching now sends the PC's input home instead.
         sent_home = []
@@ -827,7 +833,7 @@ class ControllerTests(unittest.TestCase):
         # input local and leave the worker running for the next message.
         self.controller.redirecting = True
         self.controller.clipboard = types.SimpleNamespace(
-            get_contents=lambda: (_ for _ in ()).throw(RuntimeError("synthetic clipboard failure"))
+            changed_contents=lambda: (_ for _ in ()).throw(RuntimeError("synthetic clipboard failure"))
         )
         self.controller.outbound.put_nowait({"type": "_local_clipboard", "data": {}})
         self.controller.stop_event.clear()
@@ -929,8 +935,8 @@ class ControllerTests(unittest.TestCase):
         self.assertIsNone(controller.sock)
 
     def test_a_pc_that_answered_before_and_falls_silent_is_not_called_old(self):
-        # 23-09-2026: Windows stalled every app for 40s while it reconfigured its displays, and
-        # the Mac told Toby to update a Beamer that was already current.
+        # Seen in practice: Windows stalled every app for 40s while it reconfigured its displays,
+        # and the Mac wrongly prompted to update a Beamer that was already current.
         answering, silent = FakeSocket(), FakeSocket()
         seed_receiver_reply(answering, protocol.welcome_msg())
         sockets = iter([answering, silent])
@@ -1803,7 +1809,7 @@ class CrossingWiringTests(unittest.TestCase):
         self.assertEqual(kinds.count("tick"), 3)
 
     def test_this_macs_own_push_while_windows_drives_sends_the_pc_home_and_crosses(self):
-        # The Mac half of 2f45c00: this Mac's trackpad could not push back while the PC drove it.
+        # Regression: this Mac's trackpad could not push back while the PC drove it.
         sent_home = []
         self.controller.receiving = True
         self.controller.send_peer_home = lambda: sent_home.append(True) or True
@@ -1925,6 +1931,8 @@ class CrossingWiringTests(unittest.TestCase):
         self.assertEqual(FakeQuartz.warp_calls, [(1725.0, 558.0)])
         self.assertEqual([m["type"] for m in self._sent()], [protocol.MSG_FOCUS])
         self.assertEqual(self.feedback[-1][0], "arrive")
+        # Where it landed, for the arrival effect.
+        self.assertEqual((self.feedback[-1][1].mac_edge, self.feedback[-1][1].pin), ("right", (1725.0, 558.0)))
 
     def test_inbound_switch_without_a_position_still_returns_input(self):
         self.controller.set_redirecting(True)
@@ -1932,6 +1940,45 @@ class CrossingWiringTests(unittest.TestCase):
         self.controller._handle_inbound(protocol.switch_msg("mac"))
         self.assertFalse(self.controller.redirecting)
         self.assertEqual(FakeQuartz.warp_calls, [])
+        self.assertIsNone(self.feedback[-1][1].pin)
+
+    def _kinds(self):
+        return [kind for kind, _step in self.feedback]
+
+    def test_the_shortcut_home_reports_where_the_pointer_is(self):
+        self.controller.set_redirecting(True)
+        self.feedback.clear()
+        self.controller.set_redirecting(False)
+        self.assertEqual(self._kinds(), ["home"])
+        self.assertEqual(self.feedback[0][1].pin, FakeQuartz.cursor_pin_location)
+
+    def test_a_crossing_home_reports_only_its_own_arrival(self):
+        self.controller.set_redirecting(True)
+        self.feedback.clear()
+        self.controller._handle_inbound(protocol.switch_msg("mac", "right", 0.5))
+        self.assertEqual(self._kinds(), ["arrive"])
+
+    def test_the_pc_sending_input_home_by_its_switch_reports_it_once(self):
+        self.controller.set_redirecting(True)
+        self.feedback.clear()
+        self.controller._handle_inbound(protocol.switch_msg("mac"))
+        self.assertEqual(self._kinds().count("home"), 1)
+
+    def test_the_pc_taking_this_mac_over_is_not_a_switch_home(self):
+        self.controller.set_redirecting(True)
+        self.feedback.clear()
+        self.controller.set_receiving(True)
+        self.assertNotIn("home", self._kinds())
+
+    def test_a_dropped_link_shows_nothing(self):
+        self.controller.set_redirecting(True)
+        self.feedback.clear()
+        self.controller._connection_failed("Windows stopped responding")
+        self.assertEqual(self._kinds(), [])
+
+    def test_switching_home_while_already_home_shows_nothing(self):
+        self.controller.set_redirecting(False)
+        self.assertEqual(self._kinds(), [])
 
     def test_inbound_switch_to_an_unknown_target_is_ignored(self):
         self.controller.set_redirecting(True)
@@ -1977,7 +2024,7 @@ class CrossingWiringTests(unittest.TestCase):
         self.assertEqual(controller._default_desktop_bounds(), (0.0, -300.0, 3648.0, 1117.0))
 
     def test_a_sleeping_display_still_bounds_the_desktop(self):
-        # 27-09-2026: the active list is empty while the display sleeps; the first push after
+        # Seen in practice: the active list is empty while the display sleeps; the first push after
         # waking raised and turned crossing off until settings were next saved.
         class SleepingQuartz(FakeQuartz):
             @staticmethod
@@ -2105,6 +2152,62 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual(self.controller.round_trip_ms, 20)
         self.clock.value += 0.2
         self.assertIsNone(self.controller.round_trip_ms)
+
+
+class FollowingAMovedPcTests(unittest.TestCase):
+    """The PC's router hands it a new address; it still beacons under the name it paired with."""
+
+    OLD, NEW = "192.0.2.10", "192.0.2.77"
+
+    def make(self, reply_token="synthetic-token", beacons=None):
+        sock = FakeSocket()
+        seed_receiver_reply(sock, protocol.welcome_msg(), token=reply_token)
+        tried = []
+
+        def socket_factory(address, timeout):
+            tried.append(address[0])
+            if address[0] == self.OLD:
+                raise ConnectionRefusedError("nothing there now")
+            return sock
+
+        controller = KVMController(
+            dataclasses.replace(make_config(), pc_name="STUDIO-PC"),
+            logger=quiet_logger(),
+            quartz=FakeQuartz,
+            clock=FakeClock(),
+            socket_factory=socket_factory,
+        )
+        found = beacons if beacons is not None else [
+            {"name": "STUDIO-PC", "address": self.NEW, "port": 51820, "reply_port": 24821, "pair_id": None}]
+        controller.discovery = types.SimpleNamespace(pcs=lambda: found)
+        learned = []
+        controller.on_host_learned = learned.append
+        return controller, tried, learned
+
+    def test_it_follows_the_pc_and_saves_the_address_once_it_authenticates(self):
+        controller, tried, learned = self.make()
+        self.assertFalse(controller._connect_once())
+        controller._follow_the_pc()
+        self.assertEqual(tried, [self.OLD, self.NEW])
+        self.assertEqual(controller.cfg.host, self.NEW)
+        self.assertEqual(learned, [self.NEW])
+        self.assertIsNotNone(controller.sock)
+
+    def test_a_beacon_that_cannot_authenticate_changes_nothing(self):
+        controller, tried, learned = self.make(reply_token="an-impostors-token")
+        controller._connect_once()
+        controller._follow_the_pc()
+        self.assertEqual(tried, [self.OLD, self.NEW])
+        self.assertEqual(controller.cfg.host, self.OLD)
+        self.assertEqual(learned, [])
+
+    def test_another_pcs_beacon_is_ignored(self):
+        controller, tried, learned = self.make(beacons=[
+            {"name": "SOMEONE-ELSE", "address": self.NEW, "port": 51820, "reply_port": 24821, "pair_id": None}])
+        controller._connect_once()
+        controller._follow_the_pc()
+        self.assertEqual(tried, [self.OLD])
+        self.assertEqual(learned, [])
 
 
 if __name__ == "__main__":

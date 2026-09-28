@@ -1,6 +1,6 @@
-"""What the PC gained so each machine offers the same control as the other (27-09-2026 parity
-audit, docs/parity-audit-27-09-2026.md): a recorded trigger key, the modifier style, Pause
-crossing, the full-screen hold, never crossing while dragging, alerts, and waking the Mac."""
+"""What the PC gained so each machine offers the same control as the other: a recorded
+trigger key, the modifier style, Pause crossing, the full-screen hold, never crossing
+while dragging, alerts, and waking the Mac."""
 
 import time
 import unittest

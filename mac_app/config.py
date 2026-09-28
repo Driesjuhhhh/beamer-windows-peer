@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
+import effects
 from crossing import DEFAULT_CROSSING
 
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -17,9 +18,10 @@ DEFAULT_KEY_MAP = {
     "cmd_r": "ctrl",
 }
 
-# The positional map Beamer shipped before 09-09-2026, written verbatim into
-# every existing config.json. A saved key_map beats the default, so without
-# this an upgraded install would silently keep sending Cmd as the Windows key.
+# The positional map Beamer used to ship as the default, written verbatim
+# into every existing config.json. A saved key_map beats the default, so
+# without this an upgraded install would silently keep sending Cmd as the
+# Windows key.
 # A saved map whose every entry matches this one is the old default rather
 # than a deliberate choice, so it is discarded.
 LEGACY_POSITIONAL_KEY_MAP = {
@@ -34,7 +36,12 @@ LEGACY_POSITIONAL_KEY_MAP = {
 
 # The two modifier styles the settings window offers. A saved key_map may be one of these
 # names instead of a JSON object; Positional has to be saved by name, because its object form is
-# the pre-09-09-2026 default and is discarded on load (see LEGACY_POSITIONAL_KEY_MAP).
+# the old default and is discarded on load (see LEGACY_POSITIONAL_KEY_MAP).
+# The settings window's palette: follow the Mac, or keep one. tokens.APPEARANCES is the home of these
+# values; this copy keeps config importable without the repo root, and test_shared_copies holds the
+# two together.
+APPEARANCES = ("system", "light", "dark")
+
 KEY_MAP_STYLES = {
     "semantic": DEFAULT_KEY_MAP,
     "positional": LEGACY_POSITIONAL_KEY_MAP,
@@ -64,6 +71,15 @@ class Config:
     # the PC's input arriving here. Off stops that direction only; the other keeps working.
     send_to_windows: bool = True
     allow_windows_to_drive: bool = True
+    # Ask GitHub once a day whether a newer release is out; see updates.py.
+    check_updates: bool = True
+    # Every address the window shows is hidden; see pages.redact.
+    hide_addresses: bool = False
+    # How the PC's pointer and scroll feel on this Mac; see receiver.InputScale.
+    pointer_speed: float = 1.0
+    scroll_speed: float = 1.0
+    reverse_scroll: bool = False
+    appearance: str = "system"
     # Keys and buttons that stay on this Mac while its input is on Windows; see ignored.py.
     ignored_inputs: list = field(default_factory=list)
 
@@ -115,7 +131,11 @@ def load_config(path: str = None) -> Config:
     if not isinstance(saved_crossing, dict):
         raise ConfigError("config.json crossing must be a JSON object")
     crossing.update(saved_crossing)
+    crossing["glow_style"], crossing["glow_colour"], crossing["shortcut_arrival_style"] = effects.offered(
+        crossing["glow_style"], crossing["glow_colour"], crossing["shortcut_arrival_style"])
     crossing["methods"] = list(crossing["methods"])
+    if isinstance(crossing["edge_parts"], list):
+        crossing["edge_parts"] = list(crossing["edge_parts"])
     crossing["resistance_px"] = int(crossing["resistance_px"])
 
     return Config(
@@ -132,5 +152,11 @@ def load_config(path: str = None) -> Config:
         mac_address=str(raw.get("mac_address", "") or ""),
         send_to_windows=raw.get("send_to_windows", True) is not False,
         allow_windows_to_drive=raw.get("allow_windows_to_drive", True) is not False,
+        check_updates=raw.get("check_updates", True) is not False,
+        hide_addresses=raw.get("hide_addresses", False) is True,
+        pointer_speed=raw.get("pointer_speed", 1.0),
+        scroll_speed=raw.get("scroll_speed", 1.0),
+        reverse_scroll=raw.get("reverse_scroll", False),
+        appearance=raw.get("appearance") if raw.get("appearance") in APPEARANCES else "system",
         ignored_inputs=raw.get("ignored_inputs", []),
     )

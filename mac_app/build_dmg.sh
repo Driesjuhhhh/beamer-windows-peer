@@ -42,8 +42,8 @@ export BEAMER_BUILD="$(git -C "$PROJECT_DIR" rev-list --count HEAD)"
 xcrun clang --version
 
 if [ "$RELEASE" -eq 1 ]; then
-    # docs/ is not part of the build and other sessions write there; anything else uncommitted would
-    # ship code that no commit records.
+    # docs/ holds working notes, not build output, and is excluded from this check; anything else
+    # uncommitted would ship code that no commit records.
     if [ -n "$(git -C "$PROJECT_DIR" status --porcelain -- . ':(exclude)docs')" ]; then
         echo "uncommitted changes outside docs/ - commit them so the release matches a commit" >&2
         exit 1
@@ -84,7 +84,7 @@ done
 
 # The packages py2app copies whole (rumps, cryptography, cffi, setuptools) arrive with the
 # __pycache__ pip compiled at install time, whose code objects name the venv's path on this Mac, and
-# py2app writes the building python's path into Info.plist. 1.3.0 shipped both (27-09-2026). The
+# py2app writes the building python's path into Info.plist. A shipped build once carried both. The
 # caches go, inside the zip too, where zipimport never reads a __pycache__ anyway; the loose packages
 # are compiled again under a relative name, since the app never writes bytecode into its own bundle.
 find "$APP" -name __pycache__ -type d -prune -exec rm -rf {} +
@@ -180,12 +180,11 @@ if [ "$RELEASE" -eq 1 ]; then
     xcrun stapler staple "$APP"
 fi
 
-mkdir "$STAGING_DIR/image"
-cp -R "$APP" "$STAGING_DIR/image/"
-cp "$SCRIPT_DIR/Beamer Tunnel.command" "$STAGING_DIR/image/"
-ln -s /Applications "$STAGING_DIR/image/Applications"
+# The window a downloader sees: Beamer, an arrow and Applications on a background that says what to
+# do, laid out by dmgbuild so no Finder scripting (and no Automation prompt) is involved.
 rm -f "$DMG"
-diskutil image create from --format UDZO --volumeName "Beamer" "$STAGING_DIR/image" "$DMG"
+.venv/bin/python3 -m dmgbuild -s "$SCRIPT_DIR/dmg/settings.py" -D app="$APP" \
+    -D background="$SCRIPT_DIR/dmg/background.png" "Beamer" "$DMG"
 
 if [ "$RELEASE" -eq 1 ]; then
     codesign --force --sign "$IDENTITY" --timestamp "$DMG"

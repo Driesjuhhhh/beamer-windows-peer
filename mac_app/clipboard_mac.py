@@ -7,7 +7,7 @@ Windows). Apple doesn't document NSPasteboard as thread-safe, but
 reading/writing the general pasteboard from a background thread is widely
 relied upon in practice and has not shown problems in manual testing. Flagging
 here as the one part of this feature that still wants confirmation on a real
-machine under load (see the runtime-verification notes in the task writeup).
+machine under load.
 
 AppKit is imported at module level (pyobjc is already a hard dependency of
 this app -- bridge.py imports Quartz/objc the same way) but guarded so the
@@ -24,6 +24,11 @@ except ImportError:  # pragma: no cover - exercised only off macOS
     AppKit = None
 
 LOGGER = logging.getLogger("Beamer")
+
+# The pasteboard's changeCount when it was last sent to the peer or written from it; None until
+# then and after forget_sync. A switch sends the clipboard only when the count has moved since,
+# so an unchanged screenshot is not pushed across on every switch.
+_synced_count = None
 
 
 def _text_from_pasteboard(pasteboard):
@@ -65,11 +70,41 @@ def get_contents():
         return None, None
 
 
+def _change_count():
+    try:
+        return AppKit.NSPasteboard.generalPasteboard().changeCount()
+    except Exception:
+        return None
+
+
+def changed_contents():
+    """get_contents(), or (None, None) when the pasteboard has not changed since it was last sent
+    to or written from the peer. Either way the current contents count as sent from here on."""
+    global _synced_count
+    if AppKit is None:
+        return None, None
+    count = _change_count()
+    if count is not None and count == _synced_count:
+        return None, None
+    text, png = get_contents()
+    # Only what was read counts as sent: a failed read must not hold this clipboard back.
+    if text is not None or png is not None:
+        _synced_count = count
+    return text, png
+
+
+def forget_sync():
+    """A new link: the peer may have lost what it was sent, so the next switch sends again."""
+    global _synced_count
+    _synced_count = None
+
+
 def set_contents(text, png):
     """Replace the general pasteboard with `text` and/or `png`. Returns True
     when at least one of them was set, False otherwise. Only the PNG
     representation is written for the image; every current app pastes it,
     and a TIFF alongside would double the memory for nothing. Never raises."""
+    global _synced_count
     if AppKit is None or (text is None and png is None):
         return False
     try:
@@ -81,6 +116,8 @@ def set_contents(text, png):
         if png is not None:
             data = AppKit.NSData.dataWithBytes_length_(png, len(png))
             wrote |= bool(pasteboard.setData_forType_(data, AppKit.NSPasteboardTypePNG))
+        if wrote:
+            _synced_count = pasteboard.changeCount()
         return wrote
     except Exception:
         LOGGER.exception("failed to set the macOS clipboard")

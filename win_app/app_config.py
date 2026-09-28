@@ -2,21 +2,25 @@
 
 import json
 import os
-import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import capture_win
+import effects
 import ignored
 import protocol
+import return_edge
+import tokens
 
 
-GLOW_STYLES = ("glow", "beam")
-GLOW_COLOURS = ("signal", "colourful", "ocean", "sunset", "mono")
+# Today's two styles and five colours, then every crossing effect and colour pack in effects.py.
+# Any colour goes with any style.
+GLOW_STYLES = ("glow", "beam") + effects.EFFECT_IDS
+GLOW_COLOURS = ("signal", "colourful", "ocean", "sunset", "mono") + effects.PACK_IDS
 EDGES = ("left", "right", "top", "bottom")
 CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
-METHODS = ("edge", "corner", "shortcut")
+METHODS = ("edge", "part", "corner", "shortcut")
 TRIGGER_STYLES = ("double_tap", "hold")
 # Any named key that is not a character can be the trigger, recorded by pressing it, as on the
 # Mac: a modifier, a function key, a navigation key. Stored as its wire name, which is Mac-shaped --
@@ -35,6 +39,15 @@ UNRECORDABLE_TRIGGER_VKS = {0x08, 0x09, 0x0D, 0x1B, 0x20, 0x2C}
 MODIFIER_STYLES = ("semantic", "positional")
 
 
+def palette_colours(colour: str) -> tuple:
+    """The colours of a `glow_colour` id: one of today's palettes, else a crossing effect's pack.
+    An unknown id is Signal's, as today's glow always drew it."""
+    if colour in tokens.PALETTES:
+        return tuple(tokens.PALETTES[colour])
+    found = effects.pack(colour) if colour in effects.PACK_IDS else None
+    return tuple(found[1]) if found else tuple(tokens.PALETTES["signal"])
+
+
 class ConfigError(Exception):
     pass
 
@@ -50,16 +63,32 @@ class Config:
     edge_glow: bool = True
     glow_style: str = "glow"
     glow_colour: str = "signal"
+    # A switch by the shortcut or a menu, not a crossing, plays an arrival around the pointer.
+    shortcut_arrival: bool = True
+    # What that plays: "match" for whatever the crossing style plays, else see effects.SWITCH_STYLES.
+    shortcut_arrival_style: str = "match"
+    # How long an effect takes to play through once the pointer crosses: see effects.LENGTHS.
+    effect_length: str = "normal"
     # The Mac's name from the last pairing, for the window to say who this PC is paired with.
     paired_with: str = ""
     # Whether each machine may take the other's input. Two plain switches: the
     # receiver, and the outward link.
     allow_mac_to_drive: bool = True
+    # Ask GitHub once a day whether a newer release is out; see updates.py.
+    check_updates: bool = True
+    # Every address the window shows is hidden.
+    hide_addresses: bool = False
+    # How the Mac's pointer and scroll feel on this PC; see receiver.InputScale.
+    pointer_speed: float = 1.0
+    scroll_speed: float = 1.0
+    reverse_scroll: bool = False
     send_to_mac: bool = True
     # How input leaves this PC. Any combination of the methods can be on, and
     # none of them means the PC can only be driven, never drive.
     crossing_methods: list = field(default_factory=lambda: ["edge", "shortcut"])
     crossing_corner: str = "top_left"
+    # "Part of the edge": the thirds of the edge to the Mac that cross, as return_edge.PARTS names them.
+    crossing_edge_parts: list = field(default_factory=lambda: ["middle"])
     crossing_resistance_px: int = 120
     trigger_key: str = "cmd_r"
     trigger_style: str = "double_tap"
@@ -88,6 +117,9 @@ class Config:
     mac_hardware_address: str = ""
     # Keys and buttons that stay on this PC while its input is on the Mac; see ignored.py.
     ignored_inputs: list = field(default_factory=list)
+    # The window's own palette: follow Windows, or keep one. tokens.APPEARANCES is the home of
+    # these three values.
+    appearance: str = "system"
 
 
 def migrated_port(value) -> int:
@@ -112,30 +144,6 @@ def default_config_path() -> Path:
     if base:
         return Path(base) / "Beamer" / "config.json"
     return Path.home() / ".config" / "Beamer" / "config.json"
-
-
-def legacy_config_path() -> Path:
-    """Where config.json lived under the OpenKB name, before the Beamer rename."""
-    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CONFIG_HOME")
-    if base:
-        return Path(base) / "OpenKB" / "config.json"
-    return Path.home() / ".config" / "OpenKB" / "config.json"
-
-
-def migrate_legacy_config() -> bool:
-    """Copy the OpenKB-era config.json into the new Beamer location if Beamer
-    has none yet. Never moves or deletes the old file."""
-    new_path = default_config_path()
-    old_path = legacy_config_path()
-    if new_path.exists() or not old_path.exists():
-        return False
-    new_path.parent.mkdir(parents=True, exist_ok=True)
-    # Copied beside, then renamed into place: a copy cut short would otherwise
-    # leave a truncated config that shadows the intact old one for ever.
-    staged = new_path.with_name(".config.migrating")
-    shutil.copyfile(old_path, staged)
-    os.replace(staged, new_path)
-    return True
 
 
 def validate_config(config: Config) -> None:
@@ -173,6 +181,9 @@ def validate_config(config: Config) -> None:
         raise ConfigError(f"crossing_methods must be a list of: {', '.join(METHODS)}")
     if config.crossing_corner not in CORNERS:
         raise ConfigError(f"crossing_corner must be one of: {', '.join(CORNERS)}")
+    parts = config.crossing_edge_parts
+    if not isinstance(parts, list) or not parts or not all(part in return_edge.PARTS for part in parts):
+        raise ConfigError(f"crossing_edge_parts must be one or more of: {', '.join(return_edge.PARTS)}")
     for name in ("crossing_resistance_px", "mac_resistance_px"):
         value = getattr(config, name)
         try:
@@ -183,6 +194,16 @@ def validate_config(config: Config) -> None:
             raise ConfigError(f"{name} must be a whole number of pixels from 0 to 500")
     if not isinstance(config.allow_mac_to_drive, bool):
         raise ConfigError("allow_mac_to_drive must be true or false")
+    if not isinstance(config.check_updates, bool):
+        raise ConfigError("check_updates must be true or false")
+    if not isinstance(config.hide_addresses, bool):
+        raise ConfigError("hide_addresses must be true or false")
+    for name in ("pointer_speed", "scroll_speed"):
+        value = getattr(config, name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.25 <= value <= 4.0:
+            raise ConfigError(f"{name} must be a number from 0.25 to 4")
+    if not isinstance(config.reverse_scroll, bool):
+        raise ConfigError("reverse_scroll must be true or false")
     try:
         reconnect_interval_s = float(config.reconnect_interval_s)
     except (TypeError, ValueError) as exc:
@@ -195,6 +216,13 @@ def validate_config(config: Config) -> None:
         raise ConfigError(f"glow_style must be one of: {', '.join(GLOW_STYLES)}")
     if config.glow_colour not in GLOW_COLOURS:
         raise ConfigError(f"glow_colour must be one of: {', '.join(GLOW_COLOURS)}")
+    if not isinstance(config.shortcut_arrival, bool):
+        raise ConfigError("shortcut_arrival must be true or false")
+    if config.shortcut_arrival_style not in effects.SWITCH_STYLES:
+        raise ConfigError(f"shortcut_arrival_style must be one of: {', '.join(effects.SWITCH_STYLES)}")
+    lengths = tuple(value for value, _name in effects.LENGTHS)
+    if config.effect_length not in lengths:
+        raise ConfigError(f"effect_length must be one of: {', '.join(lengths)}")
     if not isinstance(config.paired_with, str):
         raise ConfigError("paired_with must be text")
     if not isinstance(config.send_to_mac, bool):
@@ -207,6 +235,8 @@ def validate_config(config: Config) -> None:
         ignored.validate(config.ignored_inputs)
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
+    if config.appearance not in tokens.APPEARANCES:
+        raise ConfigError(f"appearance must be one of: {', '.join(tokens.APPEARANCES)}")
 
 
 def config_from_dict(raw: dict) -> Config:
@@ -217,19 +247,30 @@ def config_from_dict(raw: dict) -> Config:
         raise ConfigError(f"config.json is missing required field(s): {', '.join(missing)}")
     trigger_key = raw.get("trigger_key", "cmd_r")
     try:
+        glow_style, glow_colour, switch_style = effects.offered(
+            raw.get("glow_style", "glow"), raw.get("glow_colour", "signal"), raw.get("shortcut_arrival_style", "match"))
         config = Config(
             host=raw["host"],
             port=migrated_port(raw["port"]),
             auth_token=raw["auth_token"],
             reconnect_interval_s=float(raw.get("reconnect_interval_s", 2.0)),
             edge_glow=raw.get("edge_glow", True),
-            glow_style=raw.get("glow_style", "glow"),
-            glow_colour=raw.get("glow_colour", "signal"),
+            glow_style=glow_style,
+            glow_colour=glow_colour,
+            shortcut_arrival=raw.get("shortcut_arrival", True),
+            shortcut_arrival_style=switch_style,
+            effect_length=raw.get("effect_length", "normal"),
             paired_with=raw.get("paired_with", "") or "",
             allow_mac_to_drive=raw.get("allow_mac_to_drive", True),
+            check_updates=raw.get("check_updates", True),
+            hide_addresses=raw.get("hide_addresses", False),
+            pointer_speed=raw.get("pointer_speed", 1.0),
+            scroll_speed=raw.get("scroll_speed", 1.0),
+            reverse_scroll=raw.get("reverse_scroll", False),
             send_to_mac=raw.get("send_to_mac", True),
             crossing_methods=list(raw.get("crossing_methods", ["edge", "shortcut"])),
             crossing_corner=raw.get("crossing_corner", "top_left"),
+            crossing_edge_parts=raw.get("crossing_edge_parts", ["middle"]),
             crossing_resistance_px=int(raw.get("crossing_resistance_px", 120)),
             trigger_key=trigger_key,
             trigger_style=raw.get("trigger_style", "double_tap"),
@@ -242,6 +283,7 @@ def config_from_dict(raw: dict) -> Config:
             arrangement_set_at=int(raw.get("arrangement_set_at", 0)),
             mac_resistance_px=int(raw.get("mac_resistance_px", 120)),
             ignored_inputs=raw.get("ignored_inputs", []),
+            appearance=raw.get("appearance") if raw.get("appearance") in tokens.APPEARANCES else "system",
         )
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"config.json contains an invalid value: {exc}") from exc
@@ -280,11 +322,20 @@ def config_to_dict(config: Config) -> dict:
         "edge_glow": config.edge_glow,
         "glow_style": config.glow_style,
         "glow_colour": config.glow_colour,
+        "shortcut_arrival": config.shortcut_arrival,
+        "shortcut_arrival_style": config.shortcut_arrival_style,
+        "effect_length": config.effect_length,
         "paired_with": config.paired_with,
         "allow_mac_to_drive": config.allow_mac_to_drive,
+        "check_updates": config.check_updates,
+        "hide_addresses": config.hide_addresses,
+        "pointer_speed": config.pointer_speed,
+        "scroll_speed": config.scroll_speed,
+        "reverse_scroll": config.reverse_scroll,
         "send_to_mac": config.send_to_mac,
         "crossing_methods": list(config.crossing_methods),
         "crossing_corner": config.crossing_corner,
+        "crossing_edge_parts": list(config.crossing_edge_parts),
         "crossing_resistance_px": int(config.crossing_resistance_px),
         "trigger_key": config.trigger_key,
         "trigger_style": config.trigger_style,
@@ -297,6 +348,7 @@ def config_to_dict(config: Config) -> dict:
         "arrangement_set_at": int(config.arrangement_set_at),
         "mac_resistance_px": int(config.mac_resistance_px),
         "ignored_inputs": list(config.ignored_inputs),
+        "appearance": config.appearance,
     }
 
 

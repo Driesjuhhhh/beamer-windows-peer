@@ -31,7 +31,7 @@ INPUT_KEYBOARD = 1
 # value the Mac stamps into kCGEventSourceUserData. Raw Input has no injected
 # flag: a SendInput move reaches a WM_INPUT sink exactly as the hand's does,
 # hDevice NULL, and this value coming back in RAWMOUSE.ulExtraInformation is
-# the only thing that tells the two apart (proved on the rig, 19-09-2026).
+# the only thing that tells the two apart.
 INJECTED_MARK = 0xBEA3
 
 KEYEVENTF_EXTENDEDKEY = 0x0001
@@ -334,8 +334,8 @@ def inject_mouse_move(dx: int, dy: int) -> None:
 
 # GameInputSvc.exe runs as SYSTEM in the console session and keeps a hidden
 # window of this class, and Windows can hand that window the foreground when
-# the foreground app closes (closing a Hyper-V VM Connection window did it on
-# the rig, 25-09-2026). While it is in front, UIPI refuses every SetCursorPos
+# the foreground app closes (closing a Hyper-V VM Connection window did it).
+# While it is in front, UIPI refuses every SetCursorPos
 # and silently drops every SendInput from Beamer, which is elevated but not
 # SYSTEM, so the Mac's pointer goes dead on the PC. Nothing Beamer can call
 # takes the foreground back -- SetForegroundWindow, SwitchToThisWindow and an
@@ -526,8 +526,9 @@ def plan_scroll_units(dy, dx, mode: str, accum: List[float]) -> Tuple[int, int]:
         accum[0] += dy * WHEEL_UNITS_PER_PIXEL
         accum[1] += dx * WHEEL_UNITS_PER_PIXEL
     else:
-        accum[0] += int(dy) * 120
-        accum[1] += int(dx) * 120
+        # float, not int: a receiver's scroll speed can make a click a fraction of one.
+        accum[0] += float(dy) * 120
+        accum[1] += float(dx) * 120
     whole_y = int(accum[0])
     whole_x = int(accum[1])
     accum[0] -= whole_y

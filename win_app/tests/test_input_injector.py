@@ -383,6 +383,15 @@ class InjectSideButtonTests(unittest.TestCase):
         self.assertEqual((sent[1].dwFlags, sent[1].mouseData), (input_injector.MOUSEEVENTF_XUP, 2))
 
 
+
+class FractionalWheelTests(unittest.TestCase):
+    def test_half_clicks_add_up_to_whole_ones(self):
+        accum = [0.0, 0.0]
+        units = [input_injector.plan_scroll_units(0.5, 0.0, "line", accum)[0] for _ in range(4)]
+        self.assertEqual(sum(units), 240)
+        self.assertEqual(input_injector.plan_scroll_units(2, 0, "line", [0.0, 0.0]), (240, 0))
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -4,8 +4,8 @@ decide what it does -- Task View for three fingers up, desktop switching for
 four fingers sideways, with the same animation real fingers get.
 
 Uses CreateSyntheticPointerDevice2 / InjectSyntheticPointerInput with
-PT_TOUCHPAD (Windows 11; documented 28-03-2026 with a pre-release banner,
-present on build 26200). Every entry point returns False rather than
+PT_TOUCHPAD (Windows 11; documented with a pre-release banner, present on
+build 26200). Every entry point returns False rather than
 raising when the API is missing or refuses, so the caller can fall back to
 a keyboard shortcut. Importable on macOS for the tests: nothing touches
 user32 until a swipe is asked for.

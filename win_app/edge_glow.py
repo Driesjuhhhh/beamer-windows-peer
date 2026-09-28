@@ -12,16 +12,26 @@ the edge, and for the beam a profile along it. `signal` with `glow` is the origi
 
 from __future__ import annotations
 
+import copy
+import ctypes
 import time
 
 from PySide6.QtCore import QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QCursor, QImage, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QSizePolicy, QWidget
 
+import app_config
+import effects
 import return_edge as crossing
+import theme
 import tokens
 
 BAND_PX = 44
+# How far a corner's light reaches along each of its two walls.
+CORNER_ARM_PX = 200
+# Over how much of its length a third of the edge fades in and out at each end, rather than stopping
+# dead where the third does.
+TAPER_PX = 72
 FLASH_SECONDS = tokens.SPRING["flash_seconds"]
 STALE_SECONDS = 0.08
 
@@ -76,6 +86,8 @@ class GlowState:
         self.flash = 0.0
         self.finish = 0.0
         self.centre = -COMET / 2.0
+        # The Design page's Length: how long the flash and the beam's run-off take, as a multiple.
+        self.pace = 1.0
 
     def restart(self) -> None:
         self.centre = -COMET / 2.0
@@ -91,11 +103,11 @@ class GlowState:
         whether the push has stopped arriving, which is when the pressure fades on its own clock."""
         if stale:
             self.pressure = max(0.0, self.pressure - elapsed / crossing.DECAY_SECONDS)
-        self.flash = max(0.0, self.flash - elapsed / FLASH_SECONDS)
+        self.flash = max(0.0, self.flash - elapsed / (FLASH_SECONDS * self.pace))
         if self.finish > 0.0:
             # Run on off the end of the edge instead of stopping, and never wrap back to the start.
-            self.centre = min(1.0 + COMET, self.centre + elapsed / FINISH_TRAVERSE_S)
-            self.finish = max(0.0, self.finish - elapsed / FINISH_SECONDS)
+            self.centre = min(1.0 + COMET, self.centre + elapsed / (FINISH_TRAVERSE_S * self.pace))
+            self.finish = max(0.0, self.finish - elapsed / (FINISH_SECONDS * self.pace))
         else:
             self.centre += elapsed / traverse_seconds(self.pressure)
             if self.centre > 1.0 + COMET / 2.0:
@@ -103,9 +115,61 @@ class GlowState:
         return self.pressure > 0.0 or self.flash > 0.0 or self.finish > 0.0
 
 
-def paint(painter: QPainter, rect: QRect, edge: str, style: str, colour: str, state: GlowState, band: float = BAND_PX) -> None:
+def system_dark() -> bool:
+    """Apps in dark mode. The overlay cannot see the wallpaper, so this is the best it has."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            # The apps' mode, not the taskbar's (SystemUsesLightTheme), which Windows lets differ:
+            # windows are what the effects draw over, and the Mac reads its apps' appearance too.
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except (ImportError, OSError):
+        return True
+
+
+def part_of_monitor(owner, edge: str, part) -> "crossing.Rect":
+    """`owner` cut down along `edge` to its own third `part`, the thirds PartEdge crosses in
+    (return_edge.display_fraction); all of `owner` for no part."""
+    if part not in crossing.PARTS:
+        return owner
+    index = crossing.PARTS.index(part)
+    if edge in ("left", "right"):
+        low, high = owner.y + owner.height * index // 3, owner.y + owner.height * (index + 1) // 3
+        return crossing.Rect(owner.x, low, owner.width, high - low)
+    low, high = owner.x + owner.width * index // 3, owner.x + owner.width * (index + 1) // 3
+    return crossing.Rect(low, owner.y, high - low, owner.height)
+
+
+def corner_of_monitor(owner, corner: str, arm: int = CORNER_ARM_PX) -> "crossing.Rect":
+    """The square at `corner` of `owner` that a corner's light fills, `arm` a side."""
+    vertical, horizontal = corner.split("_")
+    x = owner.x if horizontal == "left" else owner.x + owner.width - arm
+    y = owner.y if vertical == "top" else owner.y + owner.height - arm
+    return crossing.Rect(x, y, arm, arm)
+
+
+HWND_TOPMOST = -1
+SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE, SWP_NOOWNERZORDER = 0x0001, 0x0002, 0x0010, 0x0200
+
+
+def keep_on_top(widget: QWidget) -> None:
+    """Puts `widget`'s window back at the top of the topmost windows. The taskbar is topmost too and
+    raises itself whenever it is hovered or clicked, and a push into a corner or along its edge is
+    right over it, so the topmost flag Qt sets once at creation leaves the light under it."""
+    try:
+        ctypes.windll.user32.SetWindowPos(int(widget.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+                                          SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
+    except (AttributeError, OSError):
+        pass
+
+
+def paint(painter: QPainter, rect: QRect, edge: str, style: str, colour: str, state: GlowState, band: float = BAND_PX,
+          dark: bool = False, taper: bool = False) -> None:
     """Draws the glow along `edge` of `rect`, `band` deep: the palette along the edge, cut by a
-    falloff inward from it and, for the beam, the comet's profile along it."""
+    falloff inward from it and, for the beam, the comet's profile along it. `dark` lifts the
+    darkest colours as the crossing effects do on a dark appearance; `taper` fades both ends, for a
+    third of the edge."""
     beam = style == "beam"
     strength = max(state.pressure * 0.85, state.flash, state.finish if beam else 0.0)
     if strength <= 0.0:
@@ -116,7 +180,7 @@ def paint(painter: QPainter, rect: QRect, edge: str, style: str, colour: str, st
     painter.translate(rect.topLeft())
     local = QRect(0, 0, rect.width(), rect.height())
     painter.setOpacity(strength)
-    painter.fillRect(local, _colours(colour, along, length))
+    painter.fillRect(local, _colours(colour, along, length, dark))
     painter.setOpacity(1.0)
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
     if beam:
@@ -125,16 +189,56 @@ def paint(painter: QPainter, rect: QRect, edge: str, style: str, colour: str, st
     else:
         depth = band * (0.35 + 0.65 * max(state.pressure, state.flash))
         painter.fillRect(local, _falloff(edge, local, depth, ((0.0, 1.0), (1.0, 0.0))))
+    if taper and length > 0:
+        ends = _gradient_along(along, length)
+        fade = min(0.25, TAPER_PX / length)
+        for at, alpha in ((0.0, 0.0), (fade, 1.0), (1.0 - fade, 1.0), (1.0, 0.0)):
+            ends.setColorAt(at, QColor(0, 0, 0, round(255 * alpha)))
+        painter.fillRect(local, ends)
     painter.restore()
+
+
+def paint_corner(painter: QPainter, rect: QRect, corner: str, style: str, colour: str, state: GlowState,
+                 band: float = BAND_PX, dark: bool = False) -> None:
+    """Draws the glow into `corner` of `rect`: the band along both of the corner's walls, brightest
+    where they meet and fading out along each, so it reads as the corner rather than two edges.
+    The beam's comet runs in along one wall and out along the other. Each wall is drawn on a layer
+    of its own, as its masks would otherwise cut the other wall's light."""
+    vertical, horizontal = corner.split("_")
+    ratio = painter.device().devicePixelRatioF() if painter.device() is not None else 1.0
+    for wall in (vertical, horizontal):
+        layer = QImage(rect.size() * ratio, QImage.Format.Format_ARGB32_Premultiplied)
+        layer.setDevicePixelRatio(ratio)
+        layer.fill(Qt.GlobalColor.transparent)
+        local = QRect(0, 0, rect.width(), rect.height())
+        side = copy.copy(state)
+        # Along the L the comet travels 0 to 1: the top or bottom wall from its
+        # far end into the corner over the first half, the other wall out of it over the second.
+        if wall == vertical:
+            side.centre = 2.0 * state.centre if horizontal == "right" else 1.0 - 2.0 * state.centre
+        else:
+            side.centre = 2.0 - 2.0 * state.centre if vertical == "bottom" else 2.0 * state.centre - 1.0
+        layer_painter = QPainter(layer)
+        paint(layer_painter, local, wall, style, colour, side, band, dark)
+        layer_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        along = wall in ("left", "right")
+        at_corner = (vertical == "bottom") if along else (horizontal == "right")
+        length = local.height() if along else local.width()
+        fade = _gradient_along(along, length)
+        for at, alpha in ((0.0, 1.0), (0.3, 0.75), (1.0, 0.0)):
+            fade.setColorAt(1.0 - at if at_corner else at, QColor(0, 0, 0, round(255 * alpha)))
+        layer_painter.fillRect(local, fade)
+        layer_painter.end()
+        painter.drawImage(rect.topLeft(), layer)
 
 
 def _gradient_along(along: bool, length: int) -> QLinearGradient:
     return QLinearGradient(0, 0, 0, length) if along else QLinearGradient(0, 0, length, 0)
 
 
-def _colours(colour: str, along: bool, length: int) -> QLinearGradient:
+def _colours(colour: str, along: bool, length: int, dark: bool = False) -> QLinearGradient:
     gradient = _gradient_along(along, length)
-    palette = tokens.PALETTES.get(colour, tokens.PALETTES["signal"])
+    palette = effects.legible(app_config.palette_colours(colour), dark)
     if len(palette) == 1:
         palette = palette * 2
     for index, value in enumerate(palette):
@@ -175,31 +279,39 @@ class EdgeGlow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self._edge = "left"
+        self._part = None
         self._style = "glow"
         self._colour = "signal"
         self._state = GlowState()
+        self._dark = True
         self._updated_at = 0.0
         self._ticked_at = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
 
-    def configure(self, style: str, colour: str) -> None:
+    def configure(self, style: str, colour: str, length: str = "normal") -> None:
         self._style = style
         self._colour = colour
+        self._state.pace = effects.pace(length)
 
-    def set_pressure(self, edge: str, pressure: float, crossed: bool) -> None:
+    def set_pressure(self, edge: str, pressure: float, crossed: bool, part=None) -> None:
+        """`part` is the third of the edge being pushed for Part of the edge, which lights only
+        that third, or the corner being pushed into, which lights that corner; None lights the
+        whole edge."""
         now = time.monotonic()
-        if edge != self._edge or self.isHidden():
-            self._edge = edge
+        if edge != self._edge or part != self._part or self.isHidden():
+            self._edge, self._part = edge, part
             self._place()
         self._state.push(pressure, crossed)
         self._updated_at = now
         if self.isHidden():
             self._ticked_at = now
+            self._dark = system_dark()
             self._state.restart()
             self.show()
             self._timer.start()
+        keep_on_top(self)
         self.update()
 
     def _place(self) -> None:
@@ -207,7 +319,16 @@ class EdgeGlow(QWidget):
         if not screens:
             return
         rects = [crossing.Rect(s.geometry().x(), s.geometry().y(), s.geometry().width(), s.geometry().height()) for s in screens]
-        owner = crossing.owning_monitor(rects, self._edge)
+        # The display the pointer is pushing on, as the effects' region takes it: on staggered
+        # displays the outermost one may not be it, and a third of the wrong display would light.
+        cursor = QCursor.pos()
+        owner = next((r for r in rects if r.x <= cursor.x() < r.x + r.width and r.y <= cursor.y() < r.y + r.height),
+                     None) or crossing.owning_monitor(rects, self._edge)
+        if self._part in crossing.CORNERS:
+            box = corner_of_monitor(owner, self._part, min(CORNER_ARM_PX, owner.width, owner.height))
+            self.setGeometry(QRect(box.x, box.y, box.width, box.height))
+            return
+        owner = part_of_monitor(owner, self._edge, self._part)
         if self._edge == "left":
             self.setGeometry(QRect(owner.x, owner.y, BAND_PX, owner.height))
         elif self._edge == "right":
@@ -227,11 +348,16 @@ class EdgeGlow(QWidget):
             self._timer.stop()
             self.hide()
             return
+        keep_on_top(self)
         self.update()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
-        paint(painter, self.rect(), self._edge, self._style, self._colour, self._state)
+        if self._part in crossing.CORNERS:
+            paint_corner(painter, self.rect(), self._part, self._style, self._colour, self._state, dark=self._dark)
+        else:
+            paint(painter, self.rect(), self._edge, self._style, self._colour, self._state, dark=self._dark,
+                  taper=self._part in crossing.PARTS)
         painter.end()
 
 
@@ -263,8 +389,8 @@ class GlowPreview(QWidget):
         outline = QPainterPath()
         outline.addRoundedRect(frame, radius, radius)
         ground = QLinearGradient(0, 0, 0, self.height())
-        ground.setColorAt(0.0, QColor(tokens.PALETTE["edge"]))
-        ground.setColorAt(1.0, QColor(tokens.PALETTE["well"]))
+        ground.setColorAt(0.0, QColor(theme.colour("edge")))
+        ground.setColorAt(1.0, QColor(theme.colour("well")))
         painter.fillPath(outline, ground)
         # Painted on a layer of its own, as the real glow is on its own window: its masks cut the
         # glow, and on the widget itself they would cut the ground under it too.
@@ -273,54 +399,93 @@ class GlowPreview(QWidget):
         layer.setDevicePixelRatio(ratio)
         layer.fill(Qt.GlobalColor.transparent)
         layer_painter = QPainter(layer)
-        paint(layer_painter, self.rect(), self.edge, self.style, self.colour, self.state)
+        paint(layer_painter, self.rect(), self.edge, self.style, self.colour, self.state, dark=theme.is_dark())
         layer_painter.end()
         painter.save()
         painter.setClipPath(outline)
         painter.drawImage(0, 0, layer)
         painter.restore()
-        painter.setPen(QPen(QColor(tokens.PALETTE["rule"]), 1))
+        painter.setPen(QPen(QColor(theme.colour("rule")), 1))
         painter.drawPath(outline)
         painter.end()
 
 
 class PreviewLoop:
-    """Plays every preview from one clock, and only while someone can see them."""
+    """Plays Glow and Beam's tiles from one clock: only the one the pointer is over, from the moment
+    that looks like intent, and only while someone can see it. Every other tile holds a still, the
+    push part way in, which a tile that starts playing goes on from."""
+
+    HOLD = 0.7
+    INTENT_S = 0.1
 
     def __init__(self, parent: QWidget) -> None:
         self.previews: list = []
+        self.running = False
+        self.hovered = None
+        self._hovered_at = 0.0
         self._started_at = None
         self._ticked_at = 0.0
         self._phase = None
         self._timer = QTimer(parent)
+        # Precise: a coarse timer may fire up to 5% either side, which lands frames unevenly.
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
 
     def add(self, preview: GlowPreview) -> None:
         self.previews.append(preview)
+        self._hold(preview)
 
     def run(self, wanted: bool) -> None:
-        if wanted and self._started_at is None:
-            self._started_at = self._ticked_at = time.monotonic()
-            self._phase = None
+        if wanted == self.running:
+            return
+        self.running = wanted
+        self._settle()
+        if wanted:
             self._timer.start()
-        elif not wanted and self._started_at is not None:
-            self._started_at = None
+        else:
             self._timer.stop()
-            for preview in self.previews:
-                preview.state = GlowState()
-                preview.update()
+
+    def hover(self, preview) -> None:
+        """`preview`, one of this loop's, plays while the pointer is over it; None stops it."""
+        if preview is self.hovered:
+            return
+        self._settle()
+        self.hovered, self._hovered_at = preview, time.monotonic()
+
+    def playing(self, preview) -> bool:
+        return preview is self.hovered and self._started_at is not None
+
+    def _hold(self, preview: GlowPreview) -> None:
+        preview.state = GlowState()
+        preview.state.push(self.HOLD, False)
+        preview.state.centre = 0.5
+        preview.update()
+
+    def _settle(self) -> None:
+        if self.hovered is not None and self._started_at is not None:
+            self._hold(self.hovered)
+        self._started_at = None
 
     def _tick(self) -> None:
+        preview = self.hovered
         now = time.monotonic()
+        if preview is None or now - self._hovered_at < self.INTENT_S:
+            return
+        if not preview.isVisible() or preview.visibleRegion().isEmpty():
+            self._settle()
+            return
+        if self._started_at is None:
+            # Where the script's push reaches the held still's pressure.
+            self._started_at = now - PUSH_S * self.HOLD ** (1 / 1.6)
+            self._ticked_at, self._phase = now, "push"
         elapsed, self._ticked_at = now - self._ticked_at, now
         level, phase = preview_frame(now - self._started_at)
         crossed = phase == "after" and self._phase == "push"
         self._phase = phase
-        for preview in self.previews:
-            if crossed:
-                preview.state.push(1.0, True)
-            elif phase == "push":
-                preview.state.push(level, False)
-            preview.state.step(elapsed, phase != "push")
-            preview.update()
+        if crossed:
+            preview.state.push(1.0, True)
+        elif phase == "push":
+            preview.state.push(level, False)
+        preview.state.step(elapsed, phase != "push")
+        preview.update()

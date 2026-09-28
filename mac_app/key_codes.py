@@ -133,3 +133,13 @@ KEY_TITLES = {
 
 def key_title(name):
     return KEY_TITLES.get(name, name.replace("_", " ").title())
+
+
+# The symbol printed on a Mac's modifier keys, for a key drawn as a cap.
+KEY_SYMBOLS = {"alt": "⌥", "cmd": "⌘", "ctrl": "⌃", "shift": "⇧", "caps_lock": "⇪"}
+
+
+def key_cap(name):
+    """A key as its cap reads: the modifier's symbol, then its name ("⌥ Right Option")."""
+    symbol = KEY_SYMBOLS.get(name[:-2] if name.endswith("_r") else name)
+    return f"{symbol} {key_title(name)}" if symbol else key_title(name)

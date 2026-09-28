@@ -2,8 +2,10 @@ import filecmp
 import logging
 import os
 import socket
+import threading
 import time
 import unittest
+from unittest import mock
 
 import pairing
 from pairing import Announcer, Discovery, PairingClient, PairingHost, beacon_msg, encode
@@ -120,6 +122,64 @@ class LoopbackTests(unittest.TestCase):
         with self.assertRaises(pairing.PairingError) as caught:
             self.discovery.pair(pc, "123456")
         self.assertEqual(str(caught.exception), pairing.ERROR_NOT_PAIRING)
+
+
+class FindTests(unittest.TestCase):
+    """A PC whose beacons never reach the Mac, found by its address instead."""
+
+    def setUp(self):
+        self.pc_port = free_udp_port()
+        self.mac_port = free_udp_port()
+        self.paired = []
+        self.announcer = Announcer(
+            lambda: 51820,
+            lambda token, name, address: self.paired.append((token, name, address)),
+            logger=quiet_logger(),
+            bind_port=self.pc_port,
+            announce_to=("127.0.0.1", free_udp_port()),
+            name="FAR-PC",
+        )
+        self.discovery = Discovery(logger=quiet_logger(), bind_port=self.mac_port)
+        self.discovery.start()
+        self.announcer.start()
+        self.addCleanup(self.announcer.stop)
+        self.addCleanup(self.discovery.stop)
+
+    def test_a_pc_no_beacon_reaches_is_found_by_address_and_pairs(self):
+        self.assertFalse(wait_until(lambda: self.discovery.pcs(), timeout=0.6))
+        self.discovery.find("127.0.0.1", self.pc_port)
+        self.assertTrue(wait_until(lambda: self.discovery.pcs()))
+        self.assertEqual(self.discovery.pcs()[0]["name"], "FAR-PC")
+        code = self.announcer.begin_pairing()
+        self.assertTrue(wait_until(lambda: self.discovery.pcs()[0]["pair_id"] is not None, timeout=4.0))
+        token = self.discovery.pair(self.discovery.pcs()[0], code, name="Far Mac")
+        self.assertTrue(wait_until(lambda: self.paired))
+        self.assertEqual(self.paired[0], (token, "Far Mac", "127.0.0.1"))
+
+    def test_an_empty_address_stops_asking(self):
+        self.discovery.find("127.0.0.1", self.pc_port)
+        self.assertTrue(wait_until(lambda: self.discovery._finding))
+        self.discovery.find("  ")
+        self.assertIsNone(self.discovery._finding)
+
+    def test_a_name_that_never_resolves_does_not_hold_up_beacons(self):
+        resolving = threading.Event()
+        real = socket.getaddrinfo
+
+        def slow(host, *args, **kwargs):
+            if host == "slow.invalid":
+                resolving.set()
+                time.sleep(3.0)
+                raise socket.gaierror("no such name")
+            return real(host, *args, **kwargs)
+
+        with mock.patch.object(pairing.socket, "getaddrinfo", slow):
+            self.discovery.find("slow.invalid")
+            self.assertTrue(resolving.wait(1.0))
+            sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.addCleanup(sender.close)
+            sender.sendto(pairing.encode(pairing.beacon_msg("NEAR-PC", 51820)), ("127.0.0.1", self.mac_port))
+            self.assertTrue(wait_until(lambda: self.discovery.pcs(), timeout=1.0))
 
 
 if __name__ == "__main__":

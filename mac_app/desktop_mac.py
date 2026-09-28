@@ -32,8 +32,8 @@ def _require():
 def display_ids(quartz=None) -> list:
     """The displays that make up the desktop: the active list, unless it is empty. It is empty
     while the displays sleep, and a sleeping display is still where it was, so the online list
-    stands in (27-09-2026: with the Mac's display asleep, the PC's pointer arriving and this Mac's
-    own push both failed on the empty list, and each turned its crossing off)."""
+    stands in -- with the Mac's display asleep, the PC's pointer arriving and this Mac's own push
+    both failed on the empty list, and each turned its crossing off."""
     quartz = quartz or _require()
     error, ids, count = quartz.CGGetActiveDisplayList(MAX_DISPLAYS, None, None)
     if error == 0 and count:

@@ -51,6 +51,12 @@ class FakeClipboard:
     def get_contents(self):
         return self.text, self.image
 
+    def changed_contents(self):
+        return self.text, self.image
+
+    def forget_sync(self):
+        pass
+
     def set_contents(self, text, image):
         self.set_calls.append((text, image))
         return True

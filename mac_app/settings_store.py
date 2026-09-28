@@ -1,13 +1,14 @@
 import json
 import os
-import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
 
 import config as config_module
+import effects
 import ignored
 import protocol
+import return_edge
 
 from crossing import CORNERS, EDGES, GLOW_COLOURS, GLOW_STYLES, HAPTIC_FEELS, HAPTIC_STEPS, METHODS, NOTCH_STYLES
 from key_codes import KEY_NAME_TO_CODE
@@ -16,32 +17,6 @@ from wake import parse_mac
 
 APP_SUPPORT_DIRECTORY = Path.home() / "Library" / "Application Support" / "Beamer"
 DEFAULT_SETTINGS_PATH = APP_SUPPORT_DIRECTORY / "config.json"
-
-# The OpenKB-era directory, kept only as a migration source now the app is
-# Beamer.
-LEGACY_APP_SUPPORT_DIRECTORY = Path.home() / "Library" / "Application Support" / "OpenKB"
-LEGACY_SETTINGS_PATH = LEGACY_APP_SUPPORT_DIRECTORY / "config.json"
-
-
-def migrate_legacy_config():
-    """Copy the OpenKB config.json into the new Beamer directory if Beamer has
-    none yet. Never moves or deletes the old file, so a downgrade still finds
-    it."""
-    if DEFAULT_SETTINGS_PATH.exists() or not LEGACY_SETTINGS_PATH.exists():
-        return False
-    APP_SUPPORT_DIRECTORY.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        os.chmod(APP_SUPPORT_DIRECTORY, 0o700)
-    except OSError:
-        pass
-    # Copied beside, then renamed into place: a copy cut short would otherwise
-    # leave a truncated config that shadows the intact old one for ever.
-    staged = DEFAULT_SETTINGS_PATH.with_name(".config.migrating")
-    shutil.copyfile(LEGACY_SETTINGS_PATH, staged)
-    os.chmod(staged, 0o600)
-    os.replace(staged, DEFAULT_SETTINGS_PATH)
-    return True
-
 
 class SettingsError(Exception):
     pass
@@ -63,6 +38,12 @@ def editable_default_config():
         mac_address="",
         send_to_windows=True,
         allow_windows_to_drive=True,
+        check_updates=True,
+        hide_addresses=False,
+        pointer_speed=1.0,
+        scroll_speed=1.0,
+        reverse_scroll=False,
+        appearance="system",
         ignored_inputs=[],
     )
 
@@ -80,11 +61,18 @@ def config_to_raw(cfg):
         "crossing": {
             **cfg.crossing,
             "methods": list(cfg.crossing["methods"]),
+            "edge_parts": list(cfg.crossing["edge_parts"]),
         },
         "pc_name": cfg.pc_name,
         "mac_address": cfg.mac_address,
         "send_to_windows": cfg.send_to_windows,
         "allow_windows_to_drive": cfg.allow_windows_to_drive,
+        "check_updates": cfg.check_updates,
+        "hide_addresses": cfg.hide_addresses,
+        "pointer_speed": cfg.pointer_speed,
+        "scroll_speed": cfg.scroll_speed,
+        "reverse_scroll": cfg.reverse_scroll,
+        "appearance": cfg.appearance,
         "ignored_inputs": list(cfg.ignored_inputs),
     }
 
@@ -106,8 +94,8 @@ class SettingsStore:
         """Move a config still on the old default port, and write the move down.
 
         51820 sat inside the 49152-65535 range both operating systems hand out for
-        themselves, so it was never a port anyone could rely on keeping -- WinNAT took it on
-        the rig and the PC could not listen at all. Nobody chose that number, it was what the
+        themselves, so it was never a port anyone could rely on keeping -- WinNAT claimed it on
+        one PC and the app could not listen at all. Nobody chose that number, it was what the
         app shipped with, so it moves; a port a user typed is theirs and is left alone.
         """
         if cfg.port != protocol.LEGACY_DEFAULT_PORT:
@@ -178,10 +166,13 @@ class SettingsStore:
             raise SettingsError("trigger_style must be double_tap or hold")
         crossing = cfg.crossing
         methods = crossing["methods"]
-        if not isinstance(methods, list) or not set(methods) <= set(METHODS):
+        if not isinstance(methods, list) or not all(method in METHODS for method in methods):
             raise SettingsError(f"crossing.methods must only contain: {', '.join(METHODS)}")
         if crossing["edge"] not in EDGES:
             raise SettingsError(f"crossing.edge must be one of: {', '.join(EDGES)}")
+        parts = crossing["edge_parts"]
+        if not isinstance(parts, list) or not parts or not all(part in return_edge.PARTS for part in parts):
+            raise SettingsError(f"crossing.edge_parts must be one or more of: {', '.join(return_edge.PARTS)}")
         if crossing["corner"] not in CORNERS:
             raise SettingsError(f"crossing.corner must be one of: {', '.join(CORNERS)}")
         if isinstance(crossing["resistance_px"], bool) or not 0 <= crossing["resistance_px"] <= 500:
@@ -194,15 +185,24 @@ class SettingsStore:
         choices = (
             ("haptic_feel", HAPTIC_FEELS),
             ("haptic_steps", HAPTIC_STEPS),
-            ("glow_style", GLOW_STYLES),
-            ("glow_colour", GLOW_COLOURS),
+            # Today's styles and colours, then every crossing effect and colour pack.
+            ("glow_style", GLOW_STYLES + effects.EFFECT_IDS),
+            ("glow_colour", GLOW_COLOURS + effects.PACK_IDS),
+            ("shortcut_arrival_style", effects.SWITCH_STYLES),
+            ("effect_length", tuple(value for value, _name in effects.LENGTHS)),
         )
         for name, allowed in choices:
             if crossing[name] not in allowed:
                 raise SettingsError(f"crossing.{name} must be one of: {', '.join(allowed)}")
-        for name in ("haptics", "glow", "block_while_dragging"):
+        for name in ("haptics", "glow", "block_while_dragging", "shortcut_arrival"):
             if not isinstance(crossing[name], bool):
                 raise SettingsError(f"crossing.{name} must be true or false")
+        for name in ("pointer_speed", "scroll_speed"):
+            value = getattr(cfg, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.25 <= value <= 4.0:
+                raise SettingsError(f"{name} must be a number from 0.25 to 4")
+        if not isinstance(cfg.reverse_scroll, bool):
+            raise SettingsError("reverse_scroll must be true or false")
         try:
             ignored.validate(cfg.ignored_inputs)
         except ValueError as exc:

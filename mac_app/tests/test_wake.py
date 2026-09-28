@@ -1,5 +1,6 @@
 import logging
 import threading
+import types
 import unittest
 
 import config
@@ -11,7 +12,7 @@ from wake import NOT_WOKEN_STATUS, WAKING_STATUS, WakingController, mac_from_arp
 WINDOWS_ARP = """
 Interface: 192.168.1.5 --- 0x10
   Internet Address      Physical Address      Type
-  192.168.1.1           a8-5e-45-1c-22-f0     dynamic
+  192.168.1.1           02-00-00-00-00-01     dynamic
   192.168.1.3           02-1a-2b-3c-0d-4e     dynamic
   192.168.1.30          00-11-22-33-44-55     dynamic
   224.0.0.22            01-00-5e-00-00-16     static
@@ -167,6 +168,56 @@ class WakingControllerTests(unittest.TestCase):
         self.assertEqual(self.learned, ["AA:BB:CC:DD:EE:FF"])
         self.assertEqual(self.controller.cfg.mac_address, "AA:BB:CC:DD:EE:FF")
         self.assertFalse(self.controller.can_wake)
+
+
+class ComingHomeThroughTheAppsControllerTests(unittest.TestCase):
+    """The app runs WakingController, so every way home the base class takes must pass through it."""
+
+    def make(self):
+        def refuse(address, timeout):
+            raise OSError("unreachable")
+
+        controller = WakingController(make_config(), logger=quiet_logger(), quartz=FakeQuartz, clock=FakeClock(),
+                                      socket_factory=refuse)
+        controller.redirecting = True
+        return controller
+
+    def test_the_pc_sending_input_home_returns_it(self):
+        controller = self.make()
+        controller._handle_switch({"target": "mac"})
+        self.assertFalse(controller.redirecting)
+
+    def test_the_pc_taking_this_mac_over_ends_the_redirect(self):
+        controller = self.make()
+        controller.set_receiving(True)
+        self.assertFalse(controller.redirecting)
+        self.assertTrue(controller.receiving)
+
+
+class FollowingAMovedPcThroughTheAppsControllerTests(unittest.TestCase):
+    def test_the_app_controller_takes_the_new_address(self):
+        from test_bridge import FakeSocket, seed_receiver_reply
+        import protocol
+
+        sock = FakeSocket()
+        seed_receiver_reply(sock, protocol.welcome_msg())
+
+        def socket_factory(address, timeout):
+            if address[0] == "192.0.2.10":
+                raise ConnectionRefusedError("gone")
+            return sock
+
+        cfg = make_config()
+        cfg.pc_name = "STUDIO-PC"
+        controller = WakingController(cfg, logger=quiet_logger(), quartz=FakeQuartz, clock=FakeClock(),
+                                      socket_factory=socket_factory, mac_lookup=lambda host: None)
+        controller.discovery = types.SimpleNamespace(pcs=lambda: [
+            {"name": "STUDIO-PC", "address": "192.0.2.77", "port": cfg.port, "reply_port": 24821, "pair_id": None}])
+        learned = []
+        controller.on_host_learned = learned.append
+        self.assertFalse(controller._connect_once())
+        controller._follow_the_pc()
+        self.assertEqual(learned, ["192.0.2.77"])
 
 
 if __name__ == "__main__":

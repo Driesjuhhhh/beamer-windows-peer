@@ -4,13 +4,12 @@ The edge glow cannot do this job. It draws a band inward from the strip being pu
 strip sits in the top 32pt of a notched screen, where the display has no pixels at all: the band
 topped out at 20pt, so every frame of it was drawn behind the camera housing and nobody ever saw it.
 
-So the notch grows instead, drawn to the Vernier design (docs/designs/claude-2-vernier.html). A black
-shape with the notch's own concave shoulders sits over the cutout, invisible at rest. Pressure
-springs it wider and down past the cutout; a signal-coloured rim and glow trace its lower outline,
-and once it is deep enough a four-segment meter and the percentage appear inside it. Each trackpad
-tick gives the width a small velocity kick, so the tick is seen as well as felt. Breakthrough plays
-as its own fixed sequence, see `breakthrough_phase`. Everything that glows or reads is masked to
-below the cutout.
+So the notch grows instead, drawn to the Vernier design. A black shape with the notch's own concave
+shoulders sits over the cutout, invisible at rest. Pressure springs it wider and down past the
+cutout; a signal-coloured rim and glow trace its lower outline, and once it is deep enough a
+four-segment meter and the percentage appear inside it. Each trackpad tick gives the width a small
+velocity kick, so the tick is seen as well as felt. Breakthrough plays as its own fixed sequence,
+see `breakthrough_phase`. Everything that glows or reads is masked to below the cutout.
 
 Core Animation does the motion: every pressure change retargets a CASpringAnimation on the shape's
 path from its presentation value, so a push that wavers never jumps. Reduce Motion replaces growth
@@ -139,7 +138,7 @@ class NotchIsland:
         while the pointer is still pinned at the notch, the highest recent pressure is held for
         GRACE_S instead. That includes a slow push, whose pressure drains to nothing between every
         pair of events: reading the engine's pin, which it drops each time, showed and hid the
-        notch several times a second, a strobe recorded 15-09-2026. Moving off the notch still lets
+        notch several times a second, which strobes. Moving off the notch still lets
         go at once, since the engine stops touching."""
         if not getattr(getattr(self.controller, "crossing", None), "touching", False):
             self.held, self.held_at = level, now
@@ -398,7 +397,7 @@ class NotchIsland:
         view.setWantsLayer_(True)
         panel.setContentView_(view)
 
-        # Top-left origin inside the island, so every path below reads like the mock's SVG. The
+        # Top-left origin inside the island, so every path below reads like the design's SVG. The
         # window server puts a window on whole points, so the stage is offset by whatever that
         # rounding moved: the island asked for 88.5pt from x 689.5 and got 89 from x 689, which
         # anchored at the bottom left a one-pixel row of wallpaper above the black.

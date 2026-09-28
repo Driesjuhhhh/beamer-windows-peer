@@ -72,7 +72,7 @@ class RecorderTests(unittest.TestCase):
         self.recorder.eventFilter(self.recorder, event)
 
     def test_right_ctrl_is_recorded_as_right_ctrl(self):
-        # Qt 6 on the rig: nativeVirtualKey 0x11, nativeScanCode 0xE01D.
+        # What Qt 6 reports for Right Ctrl: nativeVirtualKey 0x11, nativeScanCode 0xE01D.
         self.key(True, 0x11, 0xE01D)
         self.assertEqual(self.recorded, [("key", 0xA3)])
 

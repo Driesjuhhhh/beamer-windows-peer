@@ -39,7 +39,7 @@ class PeerKeysReleasedTests(unittest.TestCase):
     def test_input_going_home_releases_what_the_peer_held(self):
         injector = FakeInjector()
         server = self._server(injector)
-        server._clipboard = type("C", (), {"get_contents": staticmethod(lambda: (None, None))})
+        server._clipboard = type("C", (), {"changed_contents": staticmethod(lambda: (None, None))})
         server._handle_focus({"type": "focus", "data": {"target": "mac"}}, None, None, "peer", "192.168.1.5")
         self.assertIn(("release_all",), injector.calls)
 

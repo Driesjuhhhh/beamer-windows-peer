@@ -15,9 +15,10 @@ import Quartz
 import objc
 
 import media_keys
+import motion
 import theme
 from ignored_titles import is_modifier_release, recorded_entry
-from key_codes import KEY_NAME_TO_CODE, SPECIAL_KEY_NAMES, key_title
+from key_codes import KEY_NAME_TO_CODE, SPECIAL_KEY_NAMES, key_cap, key_title
 
 
 def _autolayout(view):
@@ -86,8 +87,7 @@ def box(fill=None, stroke=None, radius=0.0, cls=None):
 
 def paint(view, fill=None, stroke=None, radius=None):
     layer = view.layer()
-    layer.setBackgroundColor_(theme.colour(fill).CGColor() if fill else None)
-    layer.setBorderColor_(theme.colour(stroke).CGColor() if stroke else None)
+    theme.tint(layer, background=fill, border=stroke)
     layer.setBorderWidth_(1 if stroke else 0)
     if radius is not None:
         layer.setCornerRadius_(radius)
@@ -313,7 +313,14 @@ class Readout:
 
 class LED:
     def __init__(self, diameter=8.0):
-        self.view = size(box(radius=diameter / 2), diameter, diameter)
+        self.view = size(box(), diameter, diameter)
+        self.view.layer().setMasksToBounds_(False)
+        # The lamp is a sublayer, not the view's own layer: AppKit clears a backing layer's shadow
+        # when the window's appearance changes, which would put the glow out on a palette switch.
+        self.lamp = Quartz.CALayer.layer()
+        self.lamp.setFrame_(((0, 0), (diameter, diameter)))
+        self.lamp.setCornerRadius_(diameter / 2)
+        self.view.layer().addSublayer_(self.lamp)
         self.tone = None
         self.blink = False
         self.set("off")
@@ -322,11 +329,9 @@ class LED:
         if (tone, blink) == (self.tone, self.blink):
             return
         self.tone, self.blink = tone, blink
-        layer = self.view.layer()
-        layer.setBackgroundColor_(theme.colour(tone).CGColor())
+        layer = self.lamp
+        theme.tint(layer, background=tone, shadow="signal")
         glow = tone == "signal"
-        layer.setMasksToBounds_(False)
-        layer.setShadowColor_(theme.colour("signal").CGColor())
         layer.setShadowOffset_((0, 0))
         layer.setShadowRadius_(4 if glow else 0)
         layer.setShadowOpacity_(0.55 if glow else 0)
@@ -372,6 +377,9 @@ class Pressable(AppKit.NSView):
     def isAccessibilityElement(self):
         return True
 
+    def isAccessibilityEnabled(self):
+        return bool(getattr(self, "enabled", True))
+
     @objc.python_method
     def press(self):
         if getattr(self, "enabled", True) and getattr(self, "callback", None) is not None:
@@ -391,6 +399,9 @@ class Pressable(AppKit.NSView):
         if ring is not None:
             inset = getattr(self, "ring_inset", -3.0)
             ring.setFrame_(AppKit.NSInsetRect(self.bounds(), inset, inset))
+        owner = getattr(self, "ring_owner", None)
+        if owner is not None:
+            owner.follow(self)
 
     def resetCursorRects(self):
         # A pointing hand is for the one Pressable that opens something outside the app (the
@@ -403,7 +414,7 @@ class Pressable(AppKit.NSView):
         if getattr(self, "ring", None) is None:
             self.setWantsLayer_(True)
             ring = Quartz.CALayer.layer()
-            ring.setBorderColor_(theme.colour("signal").CGColor())
+            theme.tint(ring, border="signal")
             ring.setBorderWidth_(2)
             ring.setCornerRadius_(self.layer().cornerRadius() + 2)
             self.layer().addSublayer_(ring)
@@ -494,10 +505,30 @@ class _Target(AppKit.NSObject):
         self.callback(sender)
 
 
-def field(secure=False, mono=True):
+class _CentredCell(AppKit.NSTextFieldCell):
+    """Text centred in the cell's height, at rest and while typed into, since the field editor lays
+    itself out in drawingRectForBounds too."""
+
+    def drawingRectForBounds_(self, bounds):
+        rect = objc.super(_CentredCell, self).drawingRectForBounds_(bounds)
+        height = self.cellSizeForBounds_(rect).height
+        if height >= rect.size.height:
+            return rect
+        return AppKit.NSMakeRect(rect.origin.x, rect.origin.y + (rect.size.height - height) / 2,
+                                 rect.size.width, height)
+
+
+class _CentredField(AppKit.NSTextField):
+    @classmethod
+    def cellClass(cls):
+        return _CentredCell
+
+
+def field(secure=False, mono=True, cls=None):
     """A text input on `ground` with an `edge` border and the text inset off it. Returns
     (container, control): add the container, read the control."""
-    control = _autolayout((AppKit.NSSecureTextField if secure else AppKit.NSTextField).alloc().init())
+    cls = cls or (AppKit.NSSecureTextField if secure else AppKit.NSTextField)
+    control = _autolayout(cls.alloc().init())
     control.setBordered_(False)
     control.setDrawsBackground_(False)
     control.setFocusRingType_(AppKit.NSFocusRingTypeNone)
@@ -513,13 +544,17 @@ def field(secure=False, mono=True):
 
 
 def field_row(caption, control):
-    """Caption on the left in a fixed column, control filling the rest. Returns (row, caption)."""
+    """Caption on the left in a fixed column, control filling the rest. Returns (row, caption).
+    The caption is also the control's name to VoiceOver, which otherwise reads a group of choices
+    or a field with nothing to say what it sets."""
     line = stack(vertical=False, spacing=10)
     words = Label(caption, theme.TYPE["note"], ink="ink_2", wrap=True)
     size(words.view, width=116)
     line.addArrangedSubview_(words.view)
     line.addArrangedSubview_(control)
     hug(control, AppKit.NSLayoutPriorityDefaultLow)
+    if not control.accessibilityLabel():
+        control.setAccessibilityLabel_(caption)
     return line, words
 
 
@@ -563,6 +598,8 @@ class WayTile:
         self.tick = size(_autolayout(_Tick.alloc().init()), 15, 15)
         self.name = Label(title, theme.TYPE["body"], 600)
         self.detail = Label(detail, theme.TYPE["small"], ink="ink_3", wrap=True)
+        # No detail takes no line, so a tile that is only a name stays one line tall.
+        self.detail.view.setHidden_(not detail)
         words = stack(spacing=2)
         add(words, self.name.view)
         add(words, self.detail.view)
@@ -593,6 +630,7 @@ class WayTile:
 
     def set_detail(self, text):
         self.detail.set(text)
+        self.detail.view.setHidden_(not text)
 
     def _toggle(self):
         self.value = not self._value
@@ -601,6 +639,8 @@ class WayTile:
 
 
 class _Track(AppKit.NSView):
+    """The switch's track, drawn; the knob is its own layer so it can slide across."""
+
     def isFlipped(self):
         return True
 
@@ -611,9 +651,21 @@ class _Track(AppKit.NSView):
         track.fill()
         theme.colour("signal" if on else "edge").setStroke()
         track.stroke()
-        knob = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((18 if on else 3, 3), (12, 12)))
-        theme.colour("signal" if on else "ink_3").setFill()
-        knob.fill()
+
+    @objc.python_method
+    def place_knob(self, on, animate):
+        knob = getattr(self, "knob", None)
+        if knob is None:
+            self.setWantsLayer_(True)
+            knob = Quartz.CALayer.layer()
+            knob.setCornerRadius_(6)
+            self.layer().addSublayer_(knob)
+            self.knob = knob
+        motion.transaction(animate, motion.DURATION * 0.75)
+        # Layer frames here are in the view's own flipped space, top left at the origin.
+        knob.setFrame_(((18 if on else 3, 3), (12, 12)))
+        theme.tint(knob, background="signal" if on else "ink_3")
+        Quartz.CATransaction.commit()
 
 
 class Switch:
@@ -622,14 +674,16 @@ class Switch:
     def __init__(self, title, on_change=None):
         self.on_change = on_change
         self._value = False
+        self.enabled = True
         self.view = pressable(self._toggle, role=AppKit.NSAccessibilityCheckBoxRole)
         self.view.setAccessibilityLabel_(title)
         self.track = size(_autolayout(_Track.alloc().init()), 34, 18)
-        words = Label(title, theme.TYPE["body"], wrap=True)
+        self.track.place_knob(False, False)
+        self.words = Label(title, theme.TYPE["body"], wrap=True)
         line = stack(vertical=False, spacing=12)
-        line.addArrangedSubview_(words.view)
+        line.addArrangedSubview_(self.words.view)
         line.addArrangedSubview_(self.track)
-        hug(words.view, AppKit.NSLayoutPriorityDefaultLow)
+        hug(self.words.view, AppKit.NSLayoutPriorityDefaultLow)
         self.view.addSubview_(line)
         pin(line, self.view, (3, 0, 3, 0))
 
@@ -639,12 +693,24 @@ class Switch:
 
     @value.setter
     def value(self, value):
-        self._value = bool(value)
-        self.track.on = self._value
+        value = bool(value)
+        changed = value != self._value
+        self._value = value
+        self.track.on = value
         self.track.setNeedsDisplay_(True)
-        self.view.setAccessibilityValue_(1 if self._value else 0)
+        self.track.place_knob(value, changed and motion.live(self.view))
+        self.view.setAccessibilityValue_(1 if value else 0)
+
+    def set_enabled(self, enabled):
+        self.enabled = enabled
+        # Off the tab order too, not only faded: a dimmed switch that still takes Space reads as
+        # broken.
+        self.view.enabled = enabled
+        self.view.setAlphaValue_(1.0 if enabled else 0.45)
 
     def _toggle(self):
+        if not self.enabled:
+            return
         self.value = not self._value
         if self.on_change is not None:
             self.on_change(self._value)
@@ -662,6 +728,9 @@ class Segmented:
         columns = columns or len(self.choices)
         self.view = box("edge", "edge", theme.RADIUS["segment"])
         self.view.layer().setMasksToBounds_(True)
+        # One group to VoiceOver, named by its field_row caption, with the choices inside it.
+        self.view.setAccessibilityElement_(True)
+        self.view.setAccessibilityRole_(AppKit.NSAccessibilityRadioGroupRole)
         grid = stack(spacing=1)
         grid.setDistribution_(AppKit.NSStackViewDistributionFillEqually)
         self.cells = []
@@ -676,6 +745,7 @@ class Segmented:
                 squeeze(words.view)
                 cell.addSubview_(words.view)
                 pin(words.view, cell, (6, 4, 6, 4))
+                cell.heightAnchor().constraintGreaterThanOrEqualToConstant_(28).setActive_(True)
                 row.addArrangedSubview_(cell)
                 self.cells.append((value, cell, words))
             add(grid, row)
@@ -689,14 +759,18 @@ class Segmented:
     @value.setter
     def value(self, value):
         self._value = value
-        for candidate, cell, words in self.cells:
-            chosen = candidate == value
-            # Disabled, the choice stays marked by weight but loses the ink fill, which would
-            # otherwise still read as live through the fade.
-            lit = chosen and self.enabled
-            paint(cell, "ink" if lit else "well")
-            words.set(ink="ground" if lit else "ink_2", weight=600 if chosen else 400)
-            cell.setAccessibilityValue_(1 if chosen else 0)
+
+        def mark():
+            for candidate, cell, words in self.cells:
+                chosen = candidate == value
+                # Disabled, the choice stays marked by weight but loses the ink fill, which would
+                # otherwise still read as live through the fade.
+                lit = chosen and self.enabled
+                paint(cell, "ink" if lit else "well")
+                words.set(ink="ground" if lit else "ink_2", weight=600 if chosen else 400)
+                cell.setAccessibilityValue_(1 if chosen else 0)
+
+        motion.fade_paint(self.view, mark)
 
     def set_enabled(self, enabled):
         self.enabled = enabled
@@ -863,13 +937,19 @@ class _RulerView(_Flipped):
         if direction is None or not self.owner.enabled:
             objc.super(_RulerView, self).keyDown_(event)
             return
-        self.owner.nudge(direction)
+        self.owner.nudge(direction, fine=bool(event.modifierFlags() & AppKit.NSEventModifierFlagOption))
 
     def isAccessibilityElement(self):
         return True
 
+    def isAccessibilityEnabled(self):
+        return bool(self.owner.enabled)
+
     def accessibilityRole(self):
         return AppKit.NSAccessibilitySliderRole
+
+    def accessibilityLabel(self):
+        return self.owner.title
 
     def accessibilityValue(self):
         return self.owner.value
@@ -913,9 +993,13 @@ class Ruler:
     true value even when it lies outside the ruler, in which case the thumb pins to the end; it
     only changes when the ruler is moved. `on_change` fires continuously."""
 
-    def __init__(self, low, high, labels, step=1, scale="linear", minor=25, fill="ink_2", on_change=None):
+    def __init__(self, low, high, labels, step=1, scale="linear", minor=25, fill="ink_2", on_change=None,
+                 title="", arrow_step=None):
         self.low, self.high, self.labels, self.step, self.scale = low, high, labels, step, scale
         self.minor, self.fill, self.on_change = minor, fill, on_change
+        self.title = title
+        # A linear ruler's arrows move this far, and `step` with Option held.
+        self.arrow_step = arrow_step or step
         self.enabled = True
         self._value = low
         self.view = _autolayout(_RulerView.alloc().init())
@@ -942,13 +1026,15 @@ class Ruler:
         raw = scale_value(fraction, self.low, self.high, self.scale)
         self._set(int(round(raw / self.step) * self.step))
 
-    def nudge(self, direction):
+    def nudge(self, direction, fine=False):
         pinned = min(max(self._value, self.low), self.high)
         # Equal steps along the ruler rather than in units, so arrows move evenly across a square
         # root scale; never less than one step, or a rounded step could go nowhere.
         target = scale_value(self.fraction() + direction / self.minor, self.low, self.high, self.scale)
         target = int(round(target / self.step) * self.step)
-        if self.scale == "linear" or target == pinned:
+        if self.scale == "linear":
+            target = pinned + direction * (self.step if fine else self.arrow_step)
+        elif fine or target == pinned:
             target = pinned + direction * self.step
         self._set(target)
 
@@ -982,7 +1068,7 @@ class KeyRecorder:
         self.monitor = None
         # The keycap's thicker bottom edge is the outer box showing through a 3pt gap.
         self.view = pressable(self._clicked, "edge", radius=theme.RADIUS["keycap"])
-        self.view.setAccessibilityLabel_("Trigger key")
+        self.view.setAccessibilityLabel_(f"Shortcut key, {key_title(value)}")
         face = box("ground", radius=theme.RADIUS["keycap"] - 1)
         self.view.addSubview_(face)
         pin(face, self.view, (1, 1, 3, 1))
@@ -999,6 +1085,7 @@ class KeyRecorder:
     def set_value(self, value):
         self.value = value
         self.key.set(key_title(value))
+        self.view.setAccessibilityLabel_(f"Shortcut key, {key_title(value)}")
 
     def _clicked(self):
         if self.monitor is not None:
@@ -1055,7 +1142,9 @@ class IgnoredRecorder:
         face = box("ground", radius=theme.RADIUS["keycap"] - 1)
         self.view.addSubview_(face)
         pin(face, self.view, (1, 1, 3, 1))
-        self.title = Label(self.TITLE, theme.TYPE["keycap"], mono=True, tracking=-0.02)
+        # Body size, unlike the shortcut's keycap: this is an action at the foot of a list, and at
+        # keycap size it outweighed the entries above it.
+        self.title = Label(self.TITLE, theme.TYPE["body"], 600)
         squeeze(self.title.view)
         self.hint = Label(self.HINT, theme.TYPE["small"], ink="ink_3", align=AppKit.NSTextAlignmentRight)
         line = stack(vertical=False, spacing=10)
@@ -1141,9 +1230,12 @@ class CodeBoxes:
         self.view.setDistribution_(AppKit.NSStackViewDistributionFillEqually)
         self.fields = []
         for index in range(digits):
-            container, control = field()
+            container, control = field(cls=_CentredField)
             control.setFont_(theme.mono_font(theme.TYPE["keycap"]))
             control.setAlignment_(AppKit.NSTextAlignmentCenter)
+            # A fixed box the digit centres in, rather than one that hugs the line and leaves the
+            # digit sitting on the font's descender room.
+            container.heightAnchor().constraintEqualToConstant_(48).setActive_(True)
             control.setDelegate_(self.delegate)
             control.setAccessibilityLabel_(f"Digit {index + 1}")
             self.view.addArrangedSubview_(container)
@@ -1284,6 +1376,7 @@ class Sidebar:
             footer = pressable(on_footer)
             footer.pointer_cursor = True
             footer.setAccessibilityLabel_(footer_label or footer_text)
+            footer.setToolTip_(footer_label or footer_text)
             footer_label_view = Label(footer_text, theme.TYPE["small"], ink="ink_3", wrap=True)
             footer.addSubview_(footer_label_view.view)
             # A slim right inset, with nothing beside the text: the address is 144pt of a 180pt
@@ -1332,16 +1425,74 @@ class Sidebar:
             row.setAccessibilityLabel_(name if tone is None else f"{name}, needs attention")
 
 
+class _Overlay(AppKit.NSView):
+    """A view over its host that draws and takes no clicks: the ring's own layer tree. A layer
+    added straight onto a stack view's backing layer is never drawn."""
+
+    def hitTest_(self, _point):
+        return None
+
+    def isAccessibilityElement(self):
+        return False
+
+
+class Ring:
+    """The one ring round a group's chosen tile or chip. It lives over `host`, above what it rings,
+    and slides from the old choice to the new; each ringed view's layout calls `follow`, so a
+    reflow carries the ring with it instead of leaving it behind."""
+
+    def __init__(self, host, radius, inset=0.0):
+        self.overlay = _autolayout(_Overlay.alloc().init())
+        self.overlay.setWantsLayer_(True)
+        host.addSubview_(self.overlay)
+        pin(self.overlay, host)
+        self.host = self.overlay
+        self.inset = inset
+        self.target = None
+        self.enabled = True
+        self.layer = Quartz.CALayer.layer()
+        self.layer.setBorderWidth_(2)
+        self.layer.setCornerRadius_(radius)
+        self.layer.setHidden_(True)
+        self.overlay.layer().addSublayer_(self.layer)
+
+    def show(self, target, enabled=True):
+        moving = self.target is not None and target is not None and target != self.target
+        self.target, self.enabled = target, enabled
+        if target is not None:
+            target.ring_owner = self
+        motion.transaction(moving and motion.live(self.host))
+        self.layer.setHidden_(target is None)
+        if target is not None:
+            self.layer.setFrame_(self._frame(target))
+        theme.tint(self.layer, border="ink" if enabled else "rule")
+        Quartz.CATransaction.commit()
+
+    def follow(self, view):
+        if view is not self.target:
+            return
+        motion.transaction(False)
+        self.layer.setFrame_(self._frame(view))
+        Quartz.CATransaction.commit()
+
+    def _frame(self, target):
+        rect = target.convertRect_toView_(target.bounds(), self.host)
+        return AppKit.NSInsetRect(rect, self.inset, self.inset)
+
+
 class ChoiceTiles:
     """One of several, as tiles side by side: each a live preview over its name and a line saying
     what it is, the whole tile clickable. The chosen tile takes a 2pt ink border. `.value` reads and
-    writes the value rather than the index, like Segmented."""
+    writes the value rather than the index, like Segmented. `columns` pads a short row with empty
+    space so rows of different lengths line up; the Design page's groups need that."""
 
-    def __init__(self, choices, on_change=None):
+    def __init__(self, choices, on_change=None, columns=None):
         self.on_change = on_change
         self._value = None
         self.enabled = True
         self.tiles = []
+        self.values = [choice[0] for choice in choices]
+        self.previews = [choice[3] for choice in choices]
         self.view = stack(vertical=False, spacing=10)
         self.view.setDistribution_(AppKit.NSStackViewDistributionFillEqually)
         self.view.setAlignment_(AppKit.NSLayoutAttributeTop)
@@ -1353,13 +1504,31 @@ class ChoiceTiles:
             add(column, preview)
             column.setCustomSpacing_afterView_(10, preview)
             name = Label(title, theme.TYPE["body"], 600)
+            words = Label(detail, theme.TYPE["small"], ink="ink_3", wrap=True)
+            # A narrow tile wraps its detail onto more lines; the row grows to fit rather than
+            # squeezing the title or the last line out.
+            for view in (name.view, words.view):
+                view.setContentCompressionResistancePriority_forOrientation_(
+                    AppKit.NSLayoutPriorityRequired, AppKit.NSLayoutConstraintOrientationVertical
+                )
             add(column, name.view)
-            add(column, Label(detail, theme.TYPE["small"], ink="ink_3", wrap=True).view)
+            add(column, words.view)
             tile.addSubview_(column)
-            pin(column, tile, (8, 8, 12, 8))
+            # Top-aligned, with the slack below: a tile stretched to its tallest neighbour would
+            # otherwise open a gap between its name and its detail.
+            AppKit.NSLayoutConstraint.activateConstraints_([
+                column.topAnchor().constraintEqualToAnchor_constant_(tile.topAnchor(), 8),
+                column.leadingAnchor().constraintEqualToAnchor_constant_(tile.leadingAnchor(), 8),
+                tile.trailingAnchor().constraintEqualToAnchor_constant_(column.trailingAnchor(), 8),
+                tile.bottomAnchor().constraintGreaterThanOrEqualToAnchor_constant_(column.bottomAnchor(), 12),
+            ])
             self.view.addArrangedSubview_(tile)
             tile.heightAnchor().constraintEqualToAnchor_(self.view.heightAnchor()).setActive_(True)
             self.tiles.append((value, tile, name))
+        _pad(self.view, columns, len(choices))
+        # Linked swaps in one ring for all its rows, so the ring can travel between them.
+        self.ring = Ring(self.view, theme.RADIUS["segment"])
+        self.ring_shared = False
 
     @property
     def value(self):
@@ -1368,12 +1537,15 @@ class ChoiceTiles:
     @value.setter
     def value(self, value):
         self._value = value
+        chosen_tile = None
         for candidate, tile, name in self.tiles:
             chosen = candidate == value
-            paint(tile, "ground", "ink" if chosen and self.enabled else "rule")
-            tile.layer().setBorderWidth_(2 if chosen else 1)
+            if chosen:
+                chosen_tile = tile
             name.set(ink="ink" if self.enabled else "ink_3")
             tile.setAccessibilityValue_(1 if chosen else 0)
+        if chosen_tile is not None or not self.ring_shared:
+            self.ring.show(chosen_tile, self.enabled)
 
     def set_enabled(self, enabled):
         self.enabled = enabled
@@ -1399,25 +1571,31 @@ class _Chip(AppKit.NSView):
             Quartz.CATransaction.setDisableActions_(True)
             gradient.setFrame_(self.bounds())
             Quartz.CATransaction.commit()
+        owner = getattr(self, "ring_owner", None)
+        if owner is not None:
+            owner.follow(self)
 
 
 class Swatches:
-    """One colour of several from theme.PALETTES: a chip of each palette's gradient over its name,
-    the chosen chip ringed in ink. `.value` reads and writes the palette name."""
+    """One colour of several: a chip of each palette's gradient over its name, the chosen chip ringed
+    in ink. `.value` reads and writes the palette name. A choice is (name, title), coloured from
+    theme.PALETTES, or (name, title, hex colours); `columns` pads as ChoiceTiles does."""
 
-    def __init__(self, choices, on_change=None):
+    def __init__(self, choices, on_change=None, columns=None):
         self.on_change = on_change
         self._value = None
         self.enabled = True
         self.cells = []
+        self.values = [choice[0] for choice in choices]
         self.view = stack(vertical=False, spacing=8)
         self.view.setDistribution_(AppKit.NSStackViewDistributionFillEqually)
-        for value, title in choices:
+        for choice in choices:
+            value, title = choice[:2]
             cell = pressable(lambda value=value: self._choose(value), role=AppKit.NSAccessibilityRadioButtonRole)
             cell.setAccessibilityLabel_(title)
             chip = size(box(None, "rule", theme.RADIUS["field"], cls=_Chip), height=24)
             chip.layer().setMasksToBounds_(True)
-            colours = list(theme.PALETTES[value])
+            colours = list(choice[2] if len(choice) > 2 else theme.PALETTES[value])
             if len(colours) == 1:
                 colours *= 2
             gradient = Quartz.CAGradientLayer.layer()
@@ -1435,6 +1613,9 @@ class Swatches:
             pin(column, cell, (3, 3, 3, 3))
             self.view.addArrangedSubview_(cell)
             self.cells.append((value, cell, chip, name))
+        _pad(self.view, columns, len(choices))
+        self.ring = Ring(self.view, theme.RADIUS["field"])
+        self.ring_shared = False
 
     @property
     def value(self):
@@ -1443,12 +1624,15 @@ class Swatches:
     @value.setter
     def value(self, value):
         self._value = value
+        chosen_chip = None
         for candidate, cell, chip, name in self.cells:
             chosen = candidate == value
-            paint(chip, None, "ink" if chosen and self.enabled else "rule")
-            chip.layer().setBorderWidth_(2 if chosen else 1)
+            if chosen:
+                chosen_chip = chip
             name.set(ink="ink" if chosen else "ink_2", weight=600 if chosen else 400)
             cell.setAccessibilityValue_(1 if chosen else 0)
+        if chosen_chip is not None or not self.ring_shared:
+            self.ring.show(chosen_chip, self.enabled)
 
     def set_enabled(self, enabled):
         self.enabled = enabled
@@ -1460,6 +1644,54 @@ class Swatches:
     def _choose(self, value):
         if value == self._value:
             return
+        self.value = value
+        if self.on_change is not None:
+            self.on_change(value)
+
+
+def _pad(row, columns, count):
+    """Empty cells after the last choice, so a row of `count` sits in a grid `columns` wide."""
+    for _ in range(max(0, (columns or count) - count)):
+        row.addArrangedSubview_(_autolayout(AppKit.NSView.alloc().init()))
+
+
+class Linked:
+    """Several one-of-several rows (ChoiceTiles, Swatches) acting as one choice: choosing in any row
+    clears the others. `.value`, `on_change` and `set_enabled` work as each row's do."""
+
+    def __init__(self, rows, on_change=None, host=None):
+        self.rows = list(rows)
+        self.on_change = on_change
+        self._value = None
+        # With a host holding every row, one ring serves them all and slides between rows.
+        self.ring = None
+        if host is not None and self.rows:
+            first = self.rows[0].ring
+            self.ring = Ring(host, first.layer.cornerRadius(), first.inset)
+        for row in self.rows:
+            row.on_change = self._chosen
+            if self.ring is not None:
+                row.ring.overlay.removeFromSuperview()
+                row.ring = self.ring
+                row.ring_shared = True
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = value
+        for row in self.rows:
+            row.value = value if value in row.values else None
+        if self.ring is not None and not any(value in row.values for row in self.rows):
+            self.ring.show(None)
+
+    def set_enabled(self, enabled):
+        for row in self.rows:
+            row.set_enabled(enabled)
+
+    def _chosen(self, value):
         self.value = value
         if self.on_change is not None:
             self.on_change(value)

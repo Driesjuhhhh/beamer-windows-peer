@@ -13,7 +13,7 @@ Three things here are safety, not features, and none of them may move off the
 callback thread:
 
 - A hook that returns 1 while whatever consumes its events is wedged takes
-  Toby's keyboard and mouse away with no way back. So the callback itself
+  the user's keyboard and mouse away with no way back. So the callback itself
   checks whether redirecting is still live, and the moment the sender says it
   is not -- a dropped link, a missed acknowledgement -- it passes the event
   through. Nothing it does can block.
@@ -25,7 +25,7 @@ callback thread:
   a return crossing -- injected here, then reported by Raw Input as the mouse
   moving -- read as this PC's own push against the same edge and sent this
   PC's input straight out to the Mac, which left the Mac's own notch and
-  shortcut dead until someone pressed Send input to Windows (19-09-2026).
+  shortcut dead until someone pressed Send input to Windows.
 - The character a key produces is read with only shift and caps lock applied,
   never Ctrl/Alt/Win, exactly as the Mac's translator does it, so a chord
   arrives as a modifier plus the plain key rather than as a control character.
@@ -163,7 +163,7 @@ def hook_vk(vk: int, scan: int) -> int:
     """The virtual key the low-level hook reports for a key a window saw as `vk` and `scan`. A
     window is told only Shift, Ctrl or Alt; the hook always knows which side. An extended key is
     what marks the right Ctrl and the right Alt: Qt 6 reports one with an 0xE0 prefix (0xE01D is
-    the right Ctrl, proved on the rig 27-09-2026), and the extended bit at 0x100 is read too."""
+    the right Ctrl), and the extended bit at 0x100 is read too."""
     extended = bool(scan & _EXTENDED_SCAN) or scan & 0xFF00 == _EXTENDED_PREFIX
     if vk == 0x10:
         return VK_SHIFT_RIGHT if scan & 0xFF == _RIGHT_SHIFT_SCAN else VK_SHIFT_LEFT
@@ -176,9 +176,9 @@ def hook_vk(vk: int, scan: int) -> int:
 # Windows virtual keys to the wire's key names, which are Mac-shaped: the
 # semantic mapping happens here, once, so the Mac injects what it is given
 # and nothing translates on arrival. Ctrl becomes Command and the Windows key
-# becomes Control, the exact inverse of the Mac's own key_map, so the
-# shortcuts Toby's fingers know keep working in both directions -- Ctrl+C on
-# this keyboard is Cmd+C on the Mac.
+# becomes Control, the exact inverse of the Mac's own key_map, so familiar
+# shortcuts keep working in both directions -- Ctrl+C on this keyboard is
+# Cmd+C on the Mac.
 VK_TO_NAME: Dict[int, str] = {
     0x08: "backspace",
     0x09: "tab",

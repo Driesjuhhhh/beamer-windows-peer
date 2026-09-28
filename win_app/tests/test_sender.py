@@ -58,16 +58,93 @@ class EdgeTests(unittest.TestCase):
         # The app once built its sender with no pressure callback, so the PC's own push out to
         # the Mac crossed in the dark while the same edge lit for the Mac's push home.
         seen = []
-        self.link.sender._pressure_callback = lambda edge, pressure, crossed: seen.append((edge, crossed))
+        self.link.sender._pressure_callback = lambda edge, pressure, crossed, part: seen.append((edge, crossed))
         self.push(4)
         self.assertTrue(seen, "a push against the edge reported no pressure")
         self.assertTrue(all(edge == "left" for edge, _ in seen))
         self.assertEqual(seen[-1][1], True)
 
+    def test_part_of_the_edge_lights_only_the_third_it_is_pushing(self):
+        seen = []
+        self.link.sender.update_config(make_config(crossing_methods=["part"], crossing_edge_parts=["middle", "end"]))
+        self.link.sender._pressure_callback = lambda edge, pressure, crossed, part: seen.append((edge, part))
+        self.desktop.cursor = (0, 900)
+        self.push(4)
+        self.assertTrue(seen, "a push along a chosen third reported no pressure")
+        self.assertEqual(set(seen), {("left", "end")})
+
+    def test_the_third_is_measured_on_the_pointers_own_display(self):
+        # The left display runs 200 to 1280 of a 1440-tall desktop: 1000 is its end third, though
+        # on the desktop as a whole it would be the middle one.
+        desktop = FakeDesktop([Rect(0, 200, 1920, 1080), Rect(1920, 0, 2560, 1440)], cursor=(0, 1000))
+        link = MacSenderWithLink(desktop=desktop)
+        self.addCleanup(link.close)
+        seen = []
+        link.sender.update_config(make_config(crossing_methods=["part"], crossing_edge_parts=["end"]))
+        link.sender._pressure_callback = lambda edge, pressure, crossed, part: seen.append(part)
+        for _ in range(4):
+            link.sender.on_motion(-20, 0)
+        self.assertEqual(set(seen), {"end"})
+
+    def test_the_whole_edge_names_no_third(self):
+        seen = []
+        self.link.sender._pressure_callback = lambda edge, pressure, crossed, part: seen.append(part)
+        self.push(4)
+        self.assertEqual(set(seen), {None})
+
+    def test_coming_home_reports_where_the_pointer_landed(self):
+        # The crossing effects play their arrival where the pointer is placed.
+        arrivals = []
+        self.link.sender._arrival_callback = lambda edge, x, y: arrivals.append((edge, x, y))
+        self.link.sender._handle_switch({"target": "windows", "edge": "left", "offset": 0.5})
+        self.assertEqual(arrivals, [("left",) + self.desktop.set_calls[-1]])
+
+    def test_a_raising_arrival_callback_only_logs(self):
+        def boom(edge, x, y):
+            raise RuntimeError("effect fell over")
+
+        self.link.sender._arrival_callback = boom
+        with self.assertLogs(sender.LOGGER, "ERROR"):
+            self.link.sender._handle_switch({"target": "windows", "edge": "left", "offset": 0.5})
+        self.assertTrue(self.desktop.set_calls)
+
+    def test_a_switch_without_an_edge_while_already_home_reports_no_arrival(self):
+        arrivals = []
+        self.link.sender._arrival_callback = lambda edge, x, y: arrivals.append(edge)
+        self.link.sender._handle_switch({"target": "windows"})
+        self.assertEqual(arrivals, [])
+
+    def _home_by(self, action):
+        """Input on the Mac, then brought home by `action`; what the arrival callback heard."""
+        arrivals = []
+        self.link.sender._arrival_callback = lambda edge, x, y: arrivals.append((edge, x, y))
+        self.link.sender.redirecting = True
+        action()
+        self.assertFalse(self.link.sender.redirecting)
+        return arrivals
+
+    def test_the_shortcut_home_reports_where_the_pointer_is(self):
+        self.assertEqual(self._home_by(self.link.sender.toggle), [(None, 0, 500)])
+
+    def test_the_mac_sending_input_home_by_its_switch_reports_it(self):
+        arrivals = self._home_by(lambda: self.link.sender._handle_switch({"target": "windows"}))
+        self.assertEqual(arrivals, [(None, 0, 500)])
+
+    def test_a_crossing_home_reports_only_its_own_arrival(self):
+        arrivals = self._home_by(
+            lambda: self.link.sender._handle_switch({"target": "windows", "edge": "left", "offset": 0.5}))
+        self.assertEqual([edge for edge, _x, _y in arrivals], ["left"])
+
+    def test_the_mac_taking_this_pc_over_is_not_a_switch_home(self):
+        self.assertEqual(self._home_by(lambda: self.link.sender.set_receiving(True)), [])
+
+    def test_a_dropped_link_shows_nothing(self):
+        self.assertEqual(self._home_by(lambda: self.link.sender._force_local("The Mac stopped responding")), [])
+
     def test_this_pcs_own_mouse_pushing_out_while_the_mac_drives_takes_the_pointer_across(self):
-        # 27-09-2026: the Mac's trackpad crossed to the PC, and the PC's own mouse could not push
-        # back out. The Mac's injected moves carry INJECTED_MARK and never reach on_motion, so a
-        # push here is the hand's: the Mac gets its input back and this mouse follows it across.
+        # Before this, the Mac's trackpad could cross to the PC but the PC's own mouse could not
+        # push back out. The Mac's injected moves carry INJECTED_MARK and never reach on_motion,
+        # so a push here is the hand's: the Mac gets its input back and this mouse follows it across.
         sent_home = []
         self.link.sender.send_peer_home = lambda: sent_home.append(True) or True
         self.link.sender.set_receiving(True)
@@ -129,6 +206,14 @@ class CornerTests(unittest.TestCase):
         for _ in range(4):
             self.link.sender.on_motion(-20, -20)
         self.assertTrue(self.link.sender.redirecting)
+
+    def test_the_push_names_its_corner_for_the_effects(self):
+        seen = []
+        self.link.sender._pressure_callback = lambda edge, pressure, crossed, part: seen.append((edge, part))
+        for _ in range(4):
+            self.link.sender.on_motion(-20, -20)
+        self.assertTrue(seen)
+        self.assertEqual(set(part for _edge, part in seen), {"top_left"})
 
     def test_a_straight_push_along_the_edge_does_not(self):
         for _ in range(10):
@@ -350,6 +435,25 @@ def wait_for(predicate, timeout=5.0):
             return True
         time.sleep(0.02)
     return False
+
+
+
+class LinkDropTests(unittest.TestCase):
+    def test_the_edge_crosses_again_after_the_link_dropped_while_redirecting(self):
+        desktop = FakeDesktop(MONITORS, cursor=(0, 500))
+        link = MacSenderWithLink(desktop=desktop)
+        self.addCleanup(link.close)
+        sender = link.sender
+        for _ in range(4):
+            sender.on_motion(-20, 0)
+        self.assertTrue(sender.redirecting)
+        sender._force_local("the link to the Mac went quiet")
+        sender._sock = object()
+        sender._connected_at = sender._last_ack_at = time.monotonic()
+        desktop.cursor = (0, 500)
+        for _ in range(6):
+            sender.on_motion(-20, 0)
+        self.assertTrue(sender.redirecting)
 
 
 if __name__ == "__main__":

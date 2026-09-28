@@ -1,7 +1,7 @@
 """Keys follow this Mac's own layout in both directions. UK and US share letter positions, so every
 test here uses a layout that moves them: German swaps Y and Z and puts ü where US has [, and French
 puts A where US has Q. The tables are what UCKeyTranslate reads from macOS's own German and French
-layouts (checked 27-09-2026); the last class reads them from the system to prove that."""
+layouts; the last class reads them from the system to prove that."""
 
 import ctypes
 import sys

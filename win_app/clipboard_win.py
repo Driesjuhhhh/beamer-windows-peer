@@ -7,9 +7,8 @@ The clipboard is a contended, system-wide resource: any other process that
 briefly holds it makes OpenClipboard fail, which is normal and expected, not
 exceptional. `_open_clipboard` retries a handful of times with a short sleep
 before giving up. This still wants confirmation on real Windows hardware
-under load (see the runtime-verification notes in the task writeup) --
-contention behaviour and timing were chosen to match common guidance, not
-measured on a real desktop.
+under load -- contention behaviour and timing were chosen to match common
+guidance, not measured on a real desktop.
 
 Images cross the wire as PNG but live on this clipboard as CF_DIB, so each
 direction converts. The DIB half (`dib_to_bgra`, `bgra_to_dib`) is pure
@@ -56,6 +55,8 @@ if _IS_WINDOWS:
     kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
     kernel32.GlobalSize.restype = ctypes.c_size_t
     kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+    user32.GetClipboardSequenceNumber.restype = ctypes.c_uint32
+    user32.GetClipboardSequenceNumber.argtypes = []
 
 CF_DIB = 8
 CF_UNICODETEXT = 13
@@ -70,6 +71,11 @@ BITMAPINFOHEADER_SIZE = 40
 _DIB_HEADER_SIZES = frozenset({40, 52, 56, 108, 124})
 _BGR_MASKS = (0x00FF0000, 0x0000FF00, 0x000000FF)
 _ALPHA_MASK = 0xFF000000
+
+# The clipboard's sequence number when it was last sent to the Mac or written from it; None until
+# then and after forget_sync. A switch sends the clipboard only when the number has moved since,
+# so an unchanged screenshot is not pushed across on every switch.
+_synced_sequence = None
 
 OPEN_RETRY_ATTEMPTS = 5
 OPEN_RETRY_DELAY_SECONDS = 0.05
@@ -317,14 +323,40 @@ def get_contents() -> Tuple[Optional[str], Optional[bytes]]:
         return None, None
 
 
+def changed_contents() -> Tuple[Optional[str], Optional[bytes]]:
+    """get_contents(), or (None, None) when the clipboard has not changed since it was last sent
+    to or written from the Mac. Either way the current contents count as sent from here on."""
+    global _synced_sequence
+    if not _IS_WINDOWS:
+        return None, None
+    sequence = user32.GetClipboardSequenceNumber()
+    if sequence and sequence == _synced_sequence:
+        return None, None
+    text, png = get_contents()
+    # Only what was read counts as sent: a failed read must not hold this clipboard back.
+    if text is not None or png is not None:
+        _synced_sequence = sequence
+    return text, png
+
+
+def forget_sync() -> None:
+    """A new link: the Mac may have lost what it was sent, so the next switch sends again."""
+    global _synced_sequence
+    _synced_sequence = None
+
+
 def set_contents(text: Optional[str], png: Optional[bytes]) -> bool:
     """Replace the Windows clipboard with `text` and/or `png`. Returns True
     when at least one was set, False if this isn't Windows or the write
     failed. Never raises."""
+    global _synced_sequence
     if not _IS_WINDOWS:
         return False
     try:
-        return _set_contents(user32, kernel32, text, png)
+        wrote = _set_contents(user32, kernel32, text, png)
+        if wrote:
+            _synced_sequence = user32.GetClipboardSequenceNumber()
+        return wrote
     except Exception:
         LOGGER.exception("failed to set the Windows clipboard")
         return False

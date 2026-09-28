@@ -110,7 +110,7 @@ def _rule_applies(rule: dict, exe: str, port: int, protocol: str = "tcp") -> boo
 def _lan_networks(networks: Sequence[dict]) -> list:
     """The interface(s) the Mac would arrive on. Internet-connected first; a Hyper-V switch on
     Public with no route out is not the LAN and must not trigger the trust offer while Wi-Fi is
-    Private, which is the owner's machine today."""
+    Private, the common case."""
     ranked = {"internet": 3, "localnetwork": 2, "subnet": 1}
     best = 0
     for network in networks:

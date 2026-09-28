@@ -1,6 +1,7 @@
 """The files both apps share are kept byte-identical, not merely similar.
 
-`ignored.py`, `pairing.py`, `protocol.py`, `receiver.py`, `return_edge.py` and `wol.py` each exist once in mac_app
+`effects.py` and its `fx_*.py`, `ignored.py`, `pairing.py`, `protocol.py`, `receiver.py`, `return_edge.py`
+and `wol.py` each exist once in mac_app
 and once in win_app because neither app can import across the other's
 directory -- both are packaged as self-contained bundles. Everything
 platform-shaped in them is injected at construction instead, so there is no
@@ -19,8 +20,11 @@ import unittest
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_TESTS_DIR))
 
-SHARED_MODULES = ("ignored.py", "pairing.py", "protocol.py", "receiver.py", "return_edge.py", "wol.py")
-SHARED_TESTS = ("test_ignored.py", "test_shared_copies.py")
+SHARED_MODULES = (
+    "effects.py", "fx_ink.py", "fx_instrument.py", "fx_membrane.py", "fx_sparks.py", "fx_warp.py",
+    "ignored.py", "pairing.py", "protocol.py", "receiver.py", "return_edge.py", "updates.py", "wol.py",
+)
+SHARED_TESTS = ("test_ignored.py", "test_shared_copies.py", "test_switch_arrival.py", "test_updates.py")
 
 
 def _digest(path):

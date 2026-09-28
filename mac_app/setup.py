@@ -22,6 +22,13 @@ setup(
         "config",
         "crossing",
         "desktop_mac",
+        "effects",
+        "effects_overlay",
+        "fx_ink",
+        "fx_instrument",
+        "fx_membrane",
+        "fx_sparks",
+        "fx_warp",
         "gestures",
         "ignored",
         "input_injector_mac",
@@ -63,7 +70,12 @@ setup(
             # cryptography ships a compiled _rust extension plus cffi; py2app's own recipe pulls
             # both in, but naming the package keeps its data files and submodules in the bundle.
             "packages": ["rumps", "cryptography", "cffi"],
-            "includes": ["objc", "AppKit", "ApplicationServices", "Quartz"],
+            # effects.py imports its fx_* modules by name at first use, which py2app's import scan
+            # cannot see, so they are named here or the bundle ships without a single effect.
+            "includes": [
+                "objc", "AppKit", "ApplicationServices", "Quartz",
+                "fx_ink", "fx_instrument", "fx_membrane", "fx_sparks", "fx_warp",
+            ],
             "iconfile": "../Beamer.icns",
             "plist": {
                 "CFBundleDisplayName": "Beamer",

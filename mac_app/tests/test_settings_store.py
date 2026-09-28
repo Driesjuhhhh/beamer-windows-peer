@@ -8,7 +8,7 @@ from unittest import mock
 import config as config_module
 import protocol
 import settings_store
-from settings_store import SettingsError, SettingsStore, config_to_raw, migrate_legacy_config
+from settings_store import SettingsError, SettingsStore, config_to_raw
 
 
 class SettingsStoreTests(unittest.TestCase):
@@ -46,6 +46,31 @@ class SettingsStoreTests(unittest.TestCase):
             self.assertFalse(loaded.send_to_windows)
             self.assertTrue(loaded.allow_windows_to_drive)
             self.assertFalse(store.load().send_to_windows)
+
+    def test_appearance_defaults_to_system_and_each_choice_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory) / "config.json")
+            self.assertEqual(store.save(self.valid_raw()).appearance, "system")
+            for choice in ("light", "dark", "system"):
+                raw = config_to_raw(store.load())
+                raw["appearance"] = choice
+                store.save(raw)
+                self.assertEqual(store.load().appearance, choice)
+            raw = config_to_raw(store.load())
+            raw["appearance"] = "sepia"
+            self.assertEqual(store.save(raw).appearance, "system")
+
+    def test_a_hand_edited_appearance_loads_as_system(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps({**self.valid_raw(), "appearance": "sepia"}), encoding="utf-8")
+            self.assertEqual(config_module.load_config(str(path)).appearance, "system")
+
+    def test_appearances_match_the_shared_tokens(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        import tokens
+        self.assertEqual(config_module.APPEARANCES, tokens.APPEARANCES)
 
     def test_legacy_positional_key_map_is_replaced_by_the_semantic_default(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -92,6 +117,50 @@ class SettingsStoreTests(unittest.TestCase):
             self.assertEqual(loaded.crossing, config_module.DEFAULT_CROSSING)
             self.assertIsNot(loaded.crossing, config_module.DEFAULT_CROSSING)
 
+    def test_showing_where_the_pointer_lands_is_on_for_an_old_config_and_round_trips_off(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            raw = self.valid_raw()
+            raw["crossing"] = {"edge": "left", "glow_style": "rupture"}
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            store = SettingsStore(path)
+            loaded = store.load()
+            self.assertTrue(loaded.crossing["shortcut_arrival"])
+            raw = config_to_raw(loaded)
+            raw["crossing"]["shortcut_arrival"] = False
+            store.save(raw)
+            self.assertFalse(store.load().crossing["shortcut_arrival"])
+            self.assertEqual(store.load().crossing["shortcut_arrival_style"], "match")
+            raw["crossing"]["shortcut_arrival_style"] = "discharge"
+            store.save(raw)
+            self.assertEqual(store.load().crossing["shortcut_arrival_style"], "discharge")
+            self.assertEqual(store.load().crossing["glow_style"], "rupture")
+
+    def test_the_length_defaults_to_normal_and_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            raw = config_to_raw(settings_store.editable_default_config())
+            path.write_text(json.dumps(raw))
+            store = SettingsStore(path)
+            self.assertEqual(store.load().crossing["effect_length"], "normal")
+            raw["crossing"]["effect_length"] = "short"
+            store.save(raw)
+            self.assertEqual(store.load().crossing["effect_length"], "short")
+            raw["crossing"]["effect_length"] = "forever"
+            with self.assertRaises(SettingsError):
+                store.save(raw)
+
+    def test_a_saved_warp_choice_reads_as_its_stand_in(self):
+        # Warp is offered nowhere for now; a Mac that chose it keeps working.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            raw = config_to_raw(settings_store.editable_default_config())
+            raw["crossing"].update(glow_style="hyperdrive", glow_colour="vaporwave", shortcut_arrival_style="light_slit")
+            path.write_text(json.dumps(raw))
+            crossing = SettingsStore(path).load().crossing
+        self.assertEqual((crossing["glow_style"], crossing["glow_colour"], crossing["shortcut_arrival_style"]),
+                         ("glow", "colourful", "match"))
+
     def test_partial_crossing_object_keeps_the_other_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
             raw = self.valid_raw()
@@ -112,6 +181,15 @@ class SettingsStoreTests(unittest.TestCase):
             ({"resistance_px": 501}, "crossing.resistance_px"),
             ({"resistance_px": -1}, "crossing.resistance_px"),
             ({"glow": "yes"}, "crossing.glow"),
+            ({"shortcut_arrival": "yes"}, "crossing.shortcut_arrival"),
+            ({"edge_parts": []}, "crossing.edge_parts"),
+            ({"edge_parts": ["side"]}, "crossing.edge_parts"),
+            ({"edge_parts": "middle"}, "crossing.edge_parts"),
+            ({"edge_parts": [["middle"]]}, "crossing.edge_parts"),
+            ({"edge_parts": [{}]}, "crossing.edge_parts"),
+            ({"methods": [["edge"]]}, "crossing.methods"),
+            ({"methods": ["part", "sideways"]}, "crossing.methods"),
+            ({"shortcut_arrival_style": "sparkle"}, "crossing.shortcut_arrival_style"),
             ({"notch_style": "sparkle"}, "crossing.notch_style"),
             ({"notch_after_ms": 50}, "crossing.notch_after_ms"),
             ({"notch_after_ms": 1.5}, "crossing.notch_after_ms"),
@@ -123,6 +201,39 @@ class SettingsStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             for crossing, field in cases:
                 with self.subTest(field=field):
+                    raw = self.valid_raw()
+                    raw["crossing"] = crossing
+                    with self.assertRaises(SettingsError) as caught:
+                        SettingsStore(Path(directory) / "config.json").save(raw)
+                    self.assertIn(field, str(caught.exception))
+
+    def test_every_crossing_effect_and_colour_pack_round_trips(self):
+        import effects
+
+        pairs = [(style, "signal") for style in effects.EFFECT_IDS]
+        pairs += [(style, colour) for style in ("glow", "beam") for colour in effects.PACK_IDS]
+        pairs += list(zip(effects.EFFECT_IDS, effects.PACK_IDS))
+        with tempfile.TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory) / "config.json")
+            for style, colour in pairs:
+                with self.subTest(style=style, colour=colour):
+                    raw = self.valid_raw()
+                    raw["crossing"] = {"glow_style": style, "glow_colour": colour}
+                    store.save(raw)
+                    loaded = store.load()
+                    self.assertEqual((loaded.crossing["glow_style"], loaded.crossing["glow_colour"]), (style, colour))
+
+    def test_rejects_a_direction_or_a_pack_where_a_style_goes(self):
+        cases = [
+            ({"glow_style": "membrane"}, "crossing.glow_style"),
+            ({"glow_style": "Skin"}, "crossing.glow_style"),
+            ({"glow_style": "neon"}, "crossing.glow_style"),
+            ({"glow_colour": "rupture"}, "crossing.glow_colour"),
+            ({"glow_colour": "atmosphere"}, "crossing.glow_colour"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            for crossing, field in cases:
+                with self.subTest(crossing=crossing):
                     raw = self.valid_raw()
                     raw["crossing"] = crossing
                     with self.assertRaises(SettingsError) as caught:
@@ -151,47 +262,6 @@ class SettingsStoreTests(unittest.TestCase):
             with self.assertRaises(SettingsError):
                 SettingsStore(path).save(raw)
 
-    def test_migrate_legacy_config_copies_without_touching_the_old_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            legacy_dir = Path(directory) / "OpenKB"
-            legacy_dir.mkdir()
-            legacy_path = legacy_dir / "config.json"
-            legacy_path.write_text(json.dumps(self.valid_raw()), encoding="utf-8")
-            os.chmod(legacy_path, 0o600)
-            new_dir = Path(directory) / "Beamer"
-            new_path = new_dir / "config.json"
-            with mock.patch.multiple(
-                settings_store,
-                LEGACY_APP_SUPPORT_DIRECTORY=legacy_dir,
-                LEGACY_SETTINGS_PATH=legacy_path,
-                APP_SUPPORT_DIRECTORY=new_dir,
-                DEFAULT_SETTINGS_PATH=new_path,
-            ):
-                self.assertTrue(migrate_legacy_config())
-                self.assertTrue(legacy_path.exists())
-                self.assertEqual(
-                    json.loads(new_path.read_text(encoding="utf-8")),
-                    json.loads(legacy_path.read_text(encoding="utf-8")),
-                )
-                self.assertEqual(new_path.stat().st_mode & 0o777, 0o600)
-                # A second run must not overwrite the now-existing new config.
-                new_path.write_text(json.dumps({"changed": True}), encoding="utf-8")
-                self.assertFalse(migrate_legacy_config())
-                self.assertEqual(json.loads(new_path.read_text(encoding="utf-8")), {"changed": True})
-
-    def test_migrate_legacy_config_is_a_noop_with_no_legacy_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            legacy_dir = Path(directory) / "OpenKB"
-            new_dir = Path(directory) / "Beamer"
-            with mock.patch.multiple(
-                settings_store,
-                LEGACY_APP_SUPPORT_DIRECTORY=legacy_dir,
-                LEGACY_SETTINGS_PATH=legacy_dir / "config.json",
-                APP_SUPPORT_DIRECTORY=new_dir,
-                DEFAULT_SETTINGS_PATH=new_dir / "config.json",
-            ):
-                self.assertFalse(migrate_legacy_config())
-                self.assertFalse(new_dir.exists())
 
 
 if __name__ == "__main__":

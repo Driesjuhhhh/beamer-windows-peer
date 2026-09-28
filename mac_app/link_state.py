@@ -76,7 +76,7 @@ def describe(controller) -> LinkState:
         via = " through the macOS 27 tunnel" if tunnel else ""
         return LinkState("mac", INK, "On Mac", linked, f"Connected to {peer}{via}.", SIGNAL)
     if not (cfg.host and cfg.auth_token):
-        return LinkState("unpaired", AMBER, "Not paired", "Setup", "Pair with a PC on the Pairing page and Beamer connects on its own.", AMBER)
+        return LinkState("unpaired", AMBER, "Not paired", "Setup", "Pair with a PC on Overview and Beamer connects on its own.", AMBER)
     address = f"{cfg.host} port {cfg.port}"
     if status == AUTH_FAILED_STATUS:
         return LinkState("token", FAULT, "Token mismatch", "Refused", f"{peer} refused this Mac's shared token. Pair again to write a fresh one.", FAULT)

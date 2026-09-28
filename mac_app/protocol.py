@@ -46,7 +46,7 @@ PROTOCOL_VERSION = 4
 # handed out below 49152, so the port a user pairs on stays theirs.
 DEFAULT_PORT = 24820
 PAIRING_PORT = 24821
-# What DEFAULT_PORT was until 20-09-2026. A config still carrying it was never chosen by
+# What DEFAULT_PORT used to be. A config still carrying it was never chosen by
 # anyone, so it is migrated rather than honoured; a port a user picked is left alone.
 LEGACY_DEFAULT_PORT = 51820
 # Wire constant, deliberately kept as the pre-rename name: changing it would break an existing
@@ -58,7 +58,7 @@ KEY_INFO = b"beamy-input-channel"
 CLIPBOARD_MAX_BYTES = 256 * 1024
 # The clipboard goes out ahead of the focus message on every switch, sealed as one frame and
 # buffered whole on both sides, so the image cap is a bound on how late the switch lands, not on
-# bandwidth. A full-screen grab of a 3456x2234 Retina display measured 2.9MB as PNG (09-09-2026);
+# bandwidth. A full-screen grab of a 3456x2234 Retina display measured 2.9MB as PNG;
 # 8MB covers that with room for a busier desktop, and as a base64 frame (~10.7MB) it is about
 # 0.1s on wired gigabit and half a second on decent Wi-Fi. Beyond it the text still goes.
 CLIPBOARD_IMAGE_MAX_BYTES = 8 * 1024 * 1024
@@ -66,7 +66,7 @@ CLIPBOARD_IMAGE_PNG = "png"
 # The largest sealed frame either end accepts. It must hold the biggest clipboard message -- an
 # 8MB image is ~10.7MB as base64, beside up to 256KB of text -- because the clipboard also travels
 # back on the reply stream. A 1MB cap there dropped the link on every return with a screenshot on
-# the clipboard (18-09-2026).
+# the clipboard.
 MAX_FRAME_BYTES = 16 * 1024 * 1024
 # The first frame each way is a hello or a welcome of a few dozen bytes. Anything larger before
 # authentication is not a Beamer, so it is refused before it is read.

@@ -3,10 +3,11 @@ LED, the 60-segment countdown and the switch."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
+from PySide6.QtCore import QEvent, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFontMetrics, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QFrame,
     QGraphicsOpacityEffect,
@@ -15,14 +16,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
+import motion
 import theme
 import tokens
 
 LEFT_CTRL_VK = 0xA2
+# The smallest a Segmented cell or small button is drawn, so each is a fair target.
+MIN_TARGET = 28
 
 
 def label(text: str, role: str, wrap: bool = False) -> QLabel:
@@ -36,6 +41,18 @@ def set_role(widget: QWidget, role: str) -> None:
     if widget.property("vernier") != role:
         widget.setProperty("vernier", role)
         theme.repolish(widget)
+
+
+def refresh_colours(root: QWidget) -> None:
+    """Re-paints every colour under `root` after theme.set_dark() swaps the palette: `update()`
+    for a widget that reads theme.colour() at paint time (nearly all of them), plus that widget's
+    own `refresh_colours()` for one that instead baked a colour into a stylesheet or rich text at
+    construction."""
+    for widget in (root, *root.findChildren(QWidget)):
+        own_refresh = getattr(widget, "refresh_colours", None)
+        if callable(own_refresh):
+            own_refresh()
+        widget.update()
 
 
 class Eyebrow(QLabel):
@@ -137,6 +154,7 @@ class Choice:
             button.setCheckable(True)
             button.setAutoExclusive(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(MIN_TARGET)
             button.setChecked(value == current)
             if on_change is not None:
                 button.clicked.connect(lambda _checked=False, v=value: on_change(v))
@@ -148,13 +166,25 @@ class Choice:
         return next((value for value, button in self._buttons.items() if button.isChecked()), None)
 
     def set_value(self, value) -> None:
+        """A value that is not a choice selects nothing."""
         button = self._buttons.get(value)
-        if button is not None and not button.isChecked():
+        if button is None:
+            for other in self._buttons.values():
+                if other.isChecked():
+                    other.setAutoExclusive(False)
+                    other.setChecked(False)
+                    other.setAutoExclusive(True)
+        elif not button.isChecked():
             button.setChecked(True)
 
     def set_enabled(self, enabled: bool) -> None:
         for button in self._buttons.values():
             button.setEnabled(enabled)
+
+    def set_names(self, prefix: str) -> None:
+        """Each cell's accessible name leads with what the row chooses: "Where your Mac is, Left"."""
+        for button in self._buttons.values():
+            button.setAccessibleName(f"{prefix}, {button.text()}")
 
 
 class _Tile(QFrame):
@@ -181,8 +211,9 @@ class _Tile(QFrame):
 
 class ChoiceTiles:
     """One of several, as tiles side by side: each a live preview over its name and a line saying
-    what it is. The chosen tile takes a 2px ink border. `on_change(value)` fires only on a real
-    choice, never on `set_value`."""
+    what it is. The chosen tile is ringed by the TileGroups it sits in, in ink, outside the tile, so
+    the signal focus border inside it still shows. `on_change(value)` fires only on a real choice,
+    never on `set_value`."""
 
     def __init__(self, items, current, on_change=None, parent: QWidget | None = None) -> None:
         self.on_change = on_change
@@ -193,9 +224,12 @@ class ChoiceTiles:
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
         self._tiles: dict = {}
+        self._titles: dict = {}
         for value, title, detail, preview in items:
             tile = _Tile(lambda v=value: self._chosen(v))
+            self._titles[value] = title
             tile.setAccessibleName(title)
+            tile.setAccessibleDescription(detail)
             column = QVBoxLayout(tile)
             column.setContentsMargins(8, 8, 8, 12)
             column.setSpacing(6)
@@ -212,6 +246,11 @@ class ChoiceTiles:
         self.value = value
         for candidate, tile in self._tiles.items():
             set_role(tile, "tile-on" if candidate == value else "tile")
+            title = self._titles[candidate]
+            tile.setAccessibleName(f"{title}, selected" if candidate == value else title)
+
+    def tile(self, value):
+        return self._tiles.get(value)
 
     def set_enabled(self, enabled: bool) -> None:
         # Faded whole, previews included, as the Mac's tiles are.
@@ -230,7 +269,12 @@ class ChoiceTiles:
 
 
 class _Swatch(QPushButton):
+    """A colour chip over its name. The name wraps onto a second line rather than widen the grid:
+    at the window's minimum width five chips a row have about 65px each."""
+
     CHIP = 24
+    MIN_WIDTH = 44
+    NAME_GAP = 4
 
     def __init__(self, colours, title: str, parent: QWidget | None = None) -> None:
         super().__init__(title, parent)
@@ -239,59 +283,161 @@ class _Swatch(QPushButton):
         self.setAutoExclusive(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAccessibleName(title)
-        self.setFixedHeight(self.CHIP + 24)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def _face(self, chosen: bool):
+        return theme.font(tokens.TYPE["small"], 600 if chosen else 400)
+
+    def _name_height(self, width: int) -> int:
+        # Measured at the heavier weight so choosing a colour never re-wraps its name.
+        metrics = QFontMetrics(self._face(True))
+        return metrics.boundingRect(QRect(0, 0, max(1, width), 1000), int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignHCenter),
+                                    self.text()).height()
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return 3 + self.CHIP + self.NAME_GAP + self._name_height(width) + 2
 
     def sizeHint(self) -> QSize:
-        return QSize(max(56, self.fontMetrics().horizontalAdvance(self.text()) + 8), self.CHIP + 24)
+        width = max(56, QFontMetrics(self._face(True)).horizontalAdvance(self.text()) + 8)
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.MIN_WIDTH, self.heightForWidth(self.MIN_WIDTH))
+
+    def chip_rect(self) -> QRectF:
+        return QRectF(3, 3, self.width() - 6, self.CHIP)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         chosen = self.isChecked()
         enabled = self.isEnabled()
-        chip = QRectF(3, 3, self.width() - 6, self.CHIP)
+        chip = self.chip_rect()
         gradient = QLinearGradient(chip.left(), 0, chip.right(), 0)
         for index, value in enumerate(self.colours):
             gradient.setColorAt(index / (len(self.colours) - 1), QColor(value))
         painter.setOpacity(1.0 if enabled else 0.45)
         painter.setBrush(gradient)
-        ring = "ink" if chosen and enabled else "rule"
-        painter.setPen(QPen(QColor(theme.colour(ring)), 2 if chosen else 1))
         radius = tokens.RADIUS["field"]
-        painter.drawRoundedRect(chip, radius, radius)
+        # The chosen chip's ink ring is SwatchGroups', outside the chip; focus is this signal
+        # border on the chip itself, so the two can be told apart when they fall on one chip.
         if self.hasFocus():
             painter.setPen(QPen(QColor(theme.colour("signal")), 2))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(chip.adjusted(-2.5, -2.5, 2.5, 2.5), radius + 2, radius + 2)
+            painter.drawRoundedRect(chip.adjusted(1, 1, -1, -1), radius, radius)
+        else:
+            painter.setPen(QPen(QColor(theme.colour("rule")), 1))
+            painter.drawRoundedRect(chip.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
         painter.setPen(QColor(theme.colour("ink" if chosen else "ink_2")))
-        face = theme.font(tokens.TYPE["small"], 600 if chosen else 400)
-        painter.setFont(face)
+        painter.setFont(self._face(chosen))
         painter.drawText(
-            QRectF(0, chip.bottom() + 4, self.width(), self.height() - chip.bottom() - 4),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            QRectF(0, chip.bottom() + self.NAME_GAP, self.width(), self.height() - chip.bottom() - self.NAME_GAP),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
             self.text(),
         )
 
 
-class Swatches:
-    """One colour of several from tokens.PALETTES: a chip of each palette's gradient over its name,
-    the chosen chip ringed in ink."""
+class TileGroups:
+    """ChoiceTiles in titled groups with one value across all of them: `groups` is (title, items)
+    with ChoiceTiles' items. `on_change(value)` fires only on a real choice. One ring marks the
+    chosen tile and slides to the next, across groups."""
 
-    def __init__(self, items, current, on_change=None, parent: QWidget | None = None) -> None:
+    RING_OUTSET = 3
+
+    def __init__(self, groups, current, on_change=None, parent: QWidget | None = None) -> None:
+        self.on_change = on_change
+        self.value = current
         self.view = QWidget(parent)
         self.view.setProperty("vernier", "plain")
-        row = QHBoxLayout(self.view)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        column = QVBoxLayout(self.view)
+        # Room for the ring outside the outermost tiles.
+        room = self.RING_OUTSET + 1
+        column.setContentsMargins(room, room, room, room)
+        column.setSpacing(6)
+        self.groups: dict = {}
+        for index, (title, items) in enumerate(groups):
+            if index:
+                column.addSpacing(8)
+            column.addWidget(label(title, "key"))
+            tiles = ChoiceTiles(items, current, on_change=self._chosen)
+            column.addWidget(tiles.view)
+            self.groups[title] = tiles
+        outset = self.RING_OUTSET
+        self.ring = motion.Ring(
+            self.view,
+            lambda tile: QRectF(tile.rect()).adjusted(-outset + 0.5, -outset + 0.5, outset - 0.5, outset - 0.5),
+            lambda: theme.colour("ink"),
+            tokens.RADIUS["button"] + outset,
+        )
+        self.ring.follow(self.tile(current))
+
+    def tile(self, value):
+        return next((tile for tiles in self.groups.values() if (tile := tiles.tile(value)) is not None), None)
+
+    def set_value(self, value) -> None:
+        self.value = value
+        for tiles in self.groups.values():
+            tiles.set_value(value)
+        self.ring.follow(self.tile(value))
+
+    def set_enabled(self, enabled: bool) -> None:
+        for tiles in self.groups.values():
+            tiles.set_enabled(enabled)
+
+    def _chosen(self, value) -> None:
+        self.set_value(value)
+        if self.on_change is not None:
+            self.on_change(value)
+
+
+class SwatchGroups:
+    """One colour of several in titled rows, each group's name over its chips as the style tiles'
+    are: `groups` is (title, ((value, name, colours), ...)). The chips share one exclusive group
+    across the rows and line up in equal columns, so a row of three sits under the first three of
+    a row of five. One ink ring marks the chosen chip and slides to the next.
+
+    The names sit over the chips, not in a column beside them: beside, the widest name plus five
+    chips outgrew the page at the window's minimum width and clipped the whole Design page."""
+
+    def __init__(self, groups, current, on_change=None, parent: QWidget | None = None) -> None:
+        self.view = QWidget(parent)
+        self.view.setProperty("vernier", "plain")
+        grid = QGridLayout(self.view)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        self._group = QButtonGroup(self.view)
+        self._group.setExclusive(True)
         self._swatches: dict = {}
-        for value, title in items:
-            swatch = _Swatch(tokens.PALETTES[value], title)
-            swatch.setChecked(value == current)
-            if on_change is not None:
-                swatch.clicked.connect(lambda _checked=False, v=value: on_change(v))
-            row.addWidget(swatch, 1)
-            self._swatches[value] = swatch
+        widest = max(len(items) for _title, items in groups)
+        for row, (title, items) in enumerate(groups):
+            heading = label(title, "key")
+            if row:
+                heading.setContentsMargins(0, 8, 0, 0)
+            grid.addWidget(heading, row * 2, 0, 1, widest)
+            for index, (value, name, colours) in enumerate(items):
+                swatch = _Swatch(colours, name)
+                swatch.setAutoExclusive(False)
+                self._group.addButton(swatch)
+                swatch.setChecked(value == current)
+                swatch.toggled.connect(lambda on, s=swatch: on and self.ring.follow(s))
+                if on_change is not None:
+                    swatch.clicked.connect(lambda _checked=False, v=value: on_change(v))
+                grid.addWidget(swatch, row * 2 + 1, index)
+                self._swatches[value] = swatch
+        for index in range(widest):
+            grid.setColumnStretch(index, 1)
+        self.ring = motion.Ring(
+            self.view,
+            lambda swatch: swatch.chip_rect().adjusted(-2.5, -2.5, 2.5, 2.5),
+            lambda: theme.colour("ink"),
+            tokens.RADIUS["field"] + 2.5,
+        )
+        self.ring.follow(self._swatches.get(current))
 
     @property
     def value(self):
@@ -322,8 +468,11 @@ class InputRecorder(QPushButton):
         Qt.MouseButton.ForwardButton: "forward",
     }
 
-    def __init__(self, title: str, on_record, hook_vk, parent: QWidget | None = None, keys_only: bool = False) -> None:
+    def __init__(self, title: str, on_record, hook_vk, parent: QWidget | None = None, keys_only: bool = False,
+                 name: str = "", mono: bool = True) -> None:
         super().__init__(parent)
+        # What the recorder is, before what it shows: "Shortcut key, Right Ctrl".
+        self.name = name
         self.title = title
         self.on_record = on_record
         self.hook_vk = hook_vk
@@ -333,13 +482,13 @@ class InputRecorder(QPushButton):
         self.left_ctrl_held = False
         self.setProperty("vernier", "keycap")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAccessibleName(title)
-        self.setFixedHeight(42)
+        self.setAccessibleName(self._spoken(title))
+        self.setFixedHeight(42 if mono else 36)
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 0, 12, 0)
         row.setSpacing(10)
         self.key = label(title, "keycap")
-        self.key.setFont(theme.mono_font(tokens.TYPE["field_mono"]))
+        self.key.setFont(theme.mono_font(tokens.TYPE["field_mono"]) if mono else theme.font(tokens.TYPE["body"]))
         self.hint = label(self.HINT, "small")
         for part in (self.key, self.hint):
             part.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -350,9 +499,12 @@ class InputRecorder(QPushButton):
     def set_title(self, title: str) -> None:
         """What the keycap says while it is not recording: the trigger recorder shows its key."""
         self.title = title
-        self.setAccessibleName(title)
+        self.setAccessibleName(self._spoken(title))
         if not self.armed:
             self.key.setText(title)
+
+    def _spoken(self, title: str) -> str:
+        return f"{self.name}, {title}" if self.name else title
 
     def cancel(self) -> None:
         self.left_ctrl_held = False
@@ -387,7 +539,7 @@ class InputRecorder(QPushButton):
             if vk == LEFT_CTRL_VK:
                 # AltGr arrives as a Left Ctrl Windows makes up, then the Right Alt pressed, so a
                 # Left Ctrl waits: let go, it is what was pressed; followed by another key, that
-                # key is (proved on the rig 27-09-2026, where AltGr recorded as Left Ctrl).
+                # key is what was pressed (without this wait, AltGr records as Left Ctrl).
                 self.left_ctrl_held = True
                 return True
             self.cancel()
@@ -445,7 +597,7 @@ class Sidebar(QWidget):
     """The page list, with the link state pinned above it. `on_select(key)` fires on a
     click; the window drives `select`/`set_link`/`set_dots` the rest of the time."""
 
-    def __init__(self, pages, on_select, foot: str = "", on_foot=None, parent: QWidget | None = None) -> None:
+    def __init__(self, pages, on_select, foot: str = "", on_foot=None, foot_tip: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setProperty("vernier", "sidebar")
         outer = QVBoxLayout(self)
@@ -481,7 +633,8 @@ class Sidebar(QWidget):
             self.foot = QPushButton(foot)
             self.foot.setProperty("vernier", "foot")
             self.foot.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.foot.setToolTip("Open in your browser")
+            self.foot.setToolTip(foot_tip or "Open in your browser")
+            self.foot.setAccessibleName(foot.replace("\n", ", "))
             if on_foot is not None:
                 self.foot.clicked.connect(on_foot)
             outer.addWidget(self.foot)
@@ -499,6 +652,28 @@ class Sidebar(QWidget):
     def set_dots(self, marks: dict) -> None:
         for key, button in self._buttons.items():
             button.set_dot(marks.get(key))
+
+
+class Ruler(QSlider):
+    """A horizontal ruler, named for screen readers, stepping 10 on the arrow keys and 1 with Alt
+    held, as the Mac's steps 1 with Option."""
+
+    STEP = 10
+
+    def __init__(self, name: str, maximum: int, minimum: int = 0, parent: QWidget | None = None) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setRange(minimum, maximum)
+        self.setSingleStep(self.STEP)
+        self.setPageStep(self.STEP * 5)
+        self.setAccessibleName(name)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def keyPressEvent(self, event) -> None:
+        steps = {Qt.Key.Key_Left: -1, Qt.Key.Key_Down: -1, Qt.Key.Key_Right: 1, Qt.Key.Key_Up: 1}
+        if event.modifiers() & Qt.KeyboardModifier.AltModifier and event.key() in steps:
+            self.setValue(self.value() + steps[event.key()])
+            return
+        super().keyPressEvent(event)
 
 
 class Switch(QCheckBox):
@@ -521,6 +696,8 @@ class Switch(QCheckBox):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            painter.setOpacity(0.45)
         on = self.isChecked()
         track = QRectF(
             self.width() - self.TRACK.width() - 2.5,

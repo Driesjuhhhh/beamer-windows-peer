@@ -6,22 +6,22 @@ only reaches the desktop its calling thread is attached to. Running elevated
 clears UIPI, not desktop access -- which is why an admin Beamer still cannot
 touch a locked machine.
 
-So this module does not inject into the lock screen. It asks Room Deck's
-credential provider to take the machine *off* the lock screen, after which
-the console is back on the Default desktop and the ordinary
-input_injector.py path works unchanged.
+So this module does not inject into the lock screen. It asks an external
+unlock credential provider to take the machine *off* the lock screen, after
+which the console is back on the Default desktop and the ordinary
+input_injector.py path works unchanged. That provider is optional and not
+part of this repository.
 
-The provider (Room-Deck/room-deck-agent/provider) is a COM DLL that LogonUI
-loads as SYSTEM. It waits on an auto-reset event and, when signalled,
-submits the password stored in a machine-DPAPI blob. Its event's DACL grants
-Authenticated Users EVENT_MODIFY_STATE, so an unelevated Beamer can signal it
-and no Beamer process ever holds a password.
+The provider is a COM DLL that LogonUI loads as SYSTEM. It waits on an
+auto-reset event and, when signalled, submits the password stored in a
+machine-DPAPI blob. Its event's DACL grants Authenticated Users
+EVENT_MODIFY_STATE, so an unelevated Beamer can signal it and no Beamer
+process ever holds a password.
 
-Room Deck owns the provider; Beamer only knocks. Shipping a second provider
-would put two waiters on one auto-reset event, and losing that race is the
-exact bug that cost Room Deck a day (see its 28-08-2026 doc). If the
-provider is not installed, every call here fails cleanly and Beamer behaves
-as it did before.
+The provider owns the unlock; Beamer only knocks. Shipping a second
+provider would put two waiters on one auto-reset event, which is a real way
+to lose the signal. If the provider is not installed, every call here fails
+cleanly and Beamer behaves as it did before.
 
 Guarded like clipboard_win.py and input_injector.py so it stays importable,
 and its orchestration testable, on a machine without ctypes.windll.
@@ -40,10 +40,11 @@ _IS_WINDOWS = sys.platform == "win32"
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True) if _IS_WINDOWS else None
 
-# Named by the provider as Global\RoomDeckUnlock.<its own session id>. Global
-# rather than Local because an RDP round trip leaves the agent and the console
-# in different sessions; the session suffix restores the per-session isolation
-# that stops a stale lock screen elsewhere swallowing the auto-reset signal.
+# The name is fixed by the provider: Global\RoomDeckUnlock.<its own session
+# id>. Global rather than Local because an RDP round trip leaves the
+# provider and the console in different sessions; the session suffix
+# restores the per-session isolation that stops a stale lock screen
+# elsewhere swallowing the auto-reset signal.
 UNLOCK_EVENT_PREFIX = "Global\\RoomDeckUnlock."
 
 EVENT_MODIFY_STATE = 0x0002
@@ -144,7 +145,7 @@ def signal_unlock(mem32=None) -> bool:
     handle = mem32.OpenEventW(EVENT_MODIFY_STATE, False, name)
     if not handle:
         LOGGER.warning(
-            "Could not open %s -- is the Room Deck unlock provider registered?", name
+            "Could not open %s -- is the unlock provider registered?", name
         )
         return False
     try:
@@ -182,7 +183,7 @@ def ensure_unlocked(
             LOGGER.info("Console unlocked after %.1fs", timeout - deadline)
             return True
     LOGGER.error(
-        "Console still locked after %.0fs -- see C:\\ProgramData\\RoomDeck\\provider.log",
+        "Console still locked after %.0fs -- see the unlock provider's own log",
         timeout,
     )
     return False

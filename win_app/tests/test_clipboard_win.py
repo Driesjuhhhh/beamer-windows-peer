@@ -75,9 +75,9 @@ class DibCodecTests(unittest.TestCase):
         # 0xFF -- which makes it impossible for every real alpha byte in the
         # image to be zero, so the all-zero-alpha-means-opaque fallback this
         # would otherwise suppress was never going to fire anyway. The
-        # over-read is real but inert: this pixel, and the whole 1-3px
-        # sweep in the verifier's notes, decode identically to a version that
-        # reads the correct 3 masks for a size-52 header.
+        # over-read is real but inert: this pixel, and every value across the
+        # small range that could trigger it, decode identically to a version
+        # that reads the correct 3 masks for a size-52 header.
         masks = struct.pack("<III", 0x00FF0000, 0x0000FF00, 0x000000FF)
         head = header(1, -1, 32, BI_BITFIELDS, size=52)
         head = head[:40] + masks

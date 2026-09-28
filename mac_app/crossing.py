@@ -13,9 +13,11 @@ mechanism is what keeps a slow lean against the edge from ever building a switch
 
 from dataclasses import dataclass
 
+import return_edge
+
 EDGES = ("left", "right", "top", "bottom")
 CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
-METHODS = ("shortcut", "edge", "corner", "notch")
+METHODS = ("shortcut", "edge", "part", "corner", "notch")
 NOTCH_STYLES = ("beam", "island")
 HAPTIC_FEELS = ("light", "medium", "firm")
 HAPTIC_STEPS = ("quarters", "halves", "breakthrough")
@@ -38,6 +40,14 @@ DEFAULT_CROSSING = {
     "glow_style": "glow",
     "glow_colour": "signal",
     "block_while_dragging": True,
+    # "Part of the edge": the thirds of `edge` that cross, as return_edge.PARTS names them.
+    "edge_parts": ["middle"],
+    # A switch by the shortcut or a menu, not a crossing, plays an arrival around the pointer.
+    "shortcut_arrival": True,
+    # What that plays: "match" for whatever the crossing style plays, else see effects.SWITCH_STYLES.
+    "shortcut_arrival_style": "match",
+    # How long an effect takes to play through once the pointer crosses: see effects.LENGTHS.
+    "effect_length": "normal",
     # Unix seconds at the moment this Mac last changed the arrangement -- which
     # edge leads to the PC. Either machine may change it, so when two ends meet
     # holding different answers the newer stamp wins. Never read by the engine;
@@ -93,9 +103,11 @@ class CrossingEngine:
         corner="top_right",
         resistance_px=120,
         block_while_dragging=True,
+        parts=("middle",),
     ):
         self.methods = frozenset(methods)
         self.edge = edge
+        self.parts = frozenset(parts)
         self.corner = corner
         self.resistance_px = float(resistance_px)
         self.block_while_dragging = block_while_dragging
@@ -109,11 +121,12 @@ class CrossingEngine:
             corner=crossing["corner"],
             resistance_px=crossing["resistance_px"],
             block_while_dragging=crossing["block_while_dragging"],
+            parts=crossing.get("edge_parts", ("middle",)),
         )
 
     @property
     def armed(self):
-        return bool(self.methods & {"edge", "corner", "notch"})
+        return bool(self.methods & {"edge", "part", "corner", "notch"})
 
     def reset(self):
         self.touching = False
@@ -128,19 +141,18 @@ class CrossingEngine:
 
     def home_edge(self, mac_edge=None):
         """The Windows edge the pointer comes home through: opposite the Mac edge it left by or,
-        for a shortcut switch, opposite whichever pointer method is on. None when only the
-        shortcut is on. The configured `edge` keeps its value while the edge method is off, so
-        reading it unconditionally armed a Windows edge nobody had enabled and left the notch's
-        own way home dead after every shortcut switch."""
+        for a shortcut switch, opposite whichever pointer method is on. The notch and a corner come
+        first because the configured `edge` keeps its value while the edge method is off, and
+        reading it then armed the wrong Windows edge and left the notch's way home dead. With only
+        the shortcut on it is still the PC's edge facing this Mac: turning this Mac's own edge off
+        says nothing about the PC's, and the PC also learns from it which way its own push goes."""
         if mac_edge is None:
-            if "edge" in self.methods:
-                mac_edge = self.edge
-            elif "notch" in self.methods:
+            if "notch" in self.methods and not self.methods & {"edge", "part"}:
                 mac_edge = "top"
-            elif "corner" in self.methods:
+            elif "corner" in self.methods and not self.methods & {"edge", "part"}:
                 mac_edge = self.corner.split("_")[1]
             else:
-                return None
+                mac_edge = self.edge
         return OPPOSITE[mac_edge]
 
     def pressure_at(self, now):
@@ -151,7 +163,9 @@ class CrossingEngine:
         remaining = self.pressure - self._decay(now - self._last_at)
         return max(0.0, min(1.0, remaining / self.resistance_px))
 
-    def feed(self, x, y, dx, dy, bounds, now, notch_range=None, dragging=False):
+    def feed(self, x, y, dx, dy, bounds, now, notch_range=None, dragging=False, displays=None):
+        """`displays` is each display's (left, top, right, bottom), which Part of the edge measures
+        its thirds along; without them it measures along `bounds`."""
         if self._last_at is not None:
             self.pressure = max(0.0, self.pressure - self._decay(now - self._last_at))
         self._last_at = now
@@ -161,14 +175,20 @@ class CrossingEngine:
             self.touching = False
             return self._release()
 
-        target = self._target(x, y, bounds, notch_range)
+        target = self._target(x, y, bounds, notch_range, displays)
         # Whether the pointer is at an armed region at all, whatever the pressure: a slow push
         # drains to nothing between events and releases, but is still against the edge.
         self.touching = target is not None
         if target is None:
             return self._release()
         mac_edge, region, diagonal, via = target
-        outward, inward = self._push(mac_edge, diagonal, x, y, dx, dy, previous_x, previous_y, bounds)
+        outward, inward = self._push(mac_edge, diagonal, x, y, dx, dy, previous_x, previous_y, self._push_box)
+        if via == "corner" and outward <= 0.0:
+            # A straight push in the corner's box is still a push on the edge it sits on, as on the PC.
+            edge_target = self._target(x, y, bounds, notch_range, displays, corner=False)
+            if edge_target is not None:
+                mac_edge, region, diagonal, via = edge_target
+                outward, inward = self._push(mac_edge, diagonal, x, y, dx, dy, previous_x, previous_y, self._push_box)
         before = self.pressure
         self.pressure = max(0.0, self.pressure + outward - inward)
         if self.pressure <= 0.0:
@@ -182,6 +202,7 @@ class CrossingEngine:
             step = Step(
                 pressure=1.0,
                 crossed=True,
+                pin=self.pin,
                 edge=OPPOSITE[mac_edge],
                 offset=self._offset(mac_edge, self.pin, bounds),
                 mac_edge=mac_edge,
@@ -207,18 +228,23 @@ class CrossingEngine:
         )
 
     @staticmethod
-    def arrival_point(edge, offset, bounds, inset=2.0):
+    def arrival_point(edge, offset, bounds, inset=2.0, displays=None):
         """Where the pointer lands when input comes home through a Mac `edge`, `offset` of the
-        way along it, a couple of points inside so the arrival itself is not already a push."""
+        way along it, a couple of points inside so the arrival itself is not already a push. With
+        `displays`, on the display return_edge.landing_monitor picks, so a staggered or stacked
+        arrangement never lands it in a gap or on the wrong display."""
         left, top, right, bottom = bounds
         offset = max(0.0, min(1.0, float(offset)))
-        if edge in ("left", "right"):
-            y = top + offset * (bottom - 1 - top)
-            x = left + inset if edge == "left" else right - 1 - inset
-        else:
-            x = left + offset * (right - 1 - left)
-            y = top + inset if edge == "top" else bottom - 1 - inset
-        return (x, y)
+        side = edge in ("left", "right")
+        along = top + offset * (bottom - 1 - top) if side else left + offset * (right - 1 - left)
+        if displays:
+            rects = [return_edge.Rect(d[0], d[1], d[2] - d[0], d[3] - d[1]) for d in displays]
+            owner = displays[rects.index(return_edge.landing_monitor(rects, edge, along))]
+            left, top, right, bottom = owner
+            along = min(max(along, top if side else left), (bottom if side else right) - 1)
+        if side:
+            return (left + inset if edge == "left" else right - 1 - inset, along)
+        return (along, top + inset if edge == "top" else bottom - 1 - inset)
 
     def _decay(self, elapsed):
         if elapsed <= 0 or self.resistance_px <= 0:
@@ -243,7 +269,7 @@ class CrossingEngine:
             return 0
         return min(3, int(4 * pressure / self.resistance_px))
 
-    def _target(self, x, y, bounds, notch_range):
+    def _target(self, x, y, bounds, notch_range, displays=None, corner=True):
         """Which armed region the pointer is touching, as (mac_edge, region, diagonal, method). The
         corner wins over the edge it sits on, since its box is inside that edge's strip."""
         left, top, right, bottom = bounds
@@ -254,7 +280,16 @@ class CrossingEngine:
             "top": y <= top + EDGE_TOLERANCE,
             "bottom": y >= y_max - EDGE_TOLERANCE,
         }
-        if "corner" in self.methods:
+        own = next((d for d in displays or () if d[0] <= x < d[2] and d[1] <= y < d[3]), None)
+        edge_box = bounds
+        if own is not None and not at[self.edge] and self._exposed(self.edge, x, y, own, displays):
+            # The edge of a display that stops short of the desktop's, with nothing beyond it: a
+            # wall all the same, as on the PC. Against the whole desktop it could never be reached.
+            at[self.edge] = True
+            edge_box = own
+        # What the push is measured against: the display's own edge when that is the wall.
+        self._push_box = bounds
+        if corner and "corner" in self.methods:
             vertical, horizontal = self.corner.split("_")
             near_x = x <= left + CORNER_PX if horizontal == "left" else x >= x_max - CORNER_PX
             near_y = y <= top + CORNER_PX if vertical == "top" else y >= y_max - CORNER_PX
@@ -263,12 +298,44 @@ class CrossingEngine:
                 box_y = top if vertical == "top" else y_max - CORNER_PX + 1
                 return horizontal, (box_x, box_y, CORNER_PX, CORNER_PX), vertical, "corner"
         if "edge" in self.methods and at[self.edge]:
-            return self.edge, self._strip(self.edge, bounds), None, "edge"
+            self._push_box = edge_box
+            return self.edge, self._strip(self.edge, edge_box), None, "edge"
+        if "part" in self.methods and at[self.edge]:
+            # The thirds are the pointer's own display's, as the PC measures them: along the whole
+            # desktop, a short display beside a tall one could hold none of the middle third.
+            part = return_edge.part_of(self._offset(self.edge, (x, y), own or bounds))
+            if part in self.parts:
+                self._push_box = edge_box
+                return self.edge, self._part_strip(self.edge, own or bounds, part), None, "edge"
         if "notch" in self.methods and notch_range is not None and at["top"]:
             notch_left, notch_right = notch_range
             if notch_left <= x <= notch_right:
                 return "top", (notch_left, top, notch_right - notch_left, 1), None, "notch"
         return None
+
+    @staticmethod
+    def _exposed(edge, x, y, own, displays):
+        """Whether the pointer is at `own`'s `edge` with no display just beyond it."""
+        left, top, right, bottom = own
+        near = {
+            "left": x <= left + EDGE_TOLERANCE,
+            "right": x >= right - 1 - EDGE_TOLERANCE,
+            "top": y <= top + EDGE_TOLERANCE,
+            "bottom": y >= bottom - 1 - EDGE_TOLERANCE,
+        }[edge]
+        if not near:
+            return False
+        beyond = {"left": (left - 1, y), "right": (right, y), "top": (x, top - 1), "bottom": (x, bottom)}[edge]
+        return not any(d[0] <= beyond[0] < d[2] and d[1] <= beyond[1] < d[3] for d in displays)
+
+    @classmethod
+    def _part_strip(cls, edge, bounds, part):
+        """The third of `edge`'s strip that `part` names, which is all the glow lights."""
+        x, y, w, h = cls._strip(edge, bounds)
+        index = return_edge.PARTS.index(part)
+        if edge in ("left", "right"):
+            return (x, y + h * index / 3.0, w, h / 3.0)
+        return (x + w * index / 3.0, y, w / 3.0, h)
 
     @staticmethod
     def _strip(edge, bounds):

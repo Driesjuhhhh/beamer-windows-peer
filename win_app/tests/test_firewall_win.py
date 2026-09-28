@@ -122,8 +122,8 @@ class InterpretTests(unittest.TestCase):
         self.assertFalse(interpret(payload([rule(profile=4)]), EXE, PORT).covered)
 
     def test_public_hyper_v_switch_beside_private_wifi_is_not_the_lan(self):
-        # The owner's machine today: Wi-Fi Private with Internet, a vEthernet switch Public with none.
-        networks = [network(), network("Public", alias="vEthernet (AI-Hub-Switch)", index=31, ipv4="NoTraffic")]
+        # A common setup: Wi-Fi Private with Internet, a vEthernet switch Public with none.
+        networks = [network(), network("Public", alias="vEthernet (Hyper-V Switch)", index=31, ipv4="NoTraffic")]
         status = interpret(payload([rule(), pairing_rule()], networks), EXE, PORT)
         self.assertEqual(status.active_profiles, ("Private", "Public"))
         self.assertEqual(status.lan_profiles, ("Private",))

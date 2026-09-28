@@ -12,6 +12,9 @@ Both proofs are HMACs keyed from the six-digit code (scrypt, salted with the pai
 the transcript, so each side shows the other that it knows the code. The shared token is
 HKDF over the X25519 secret: an eavesdropper who records every datagram cannot derive it.
 
+Where no broadcast reaches the Mac (another subnet, a VPN), the Mac asks a typed address for its
+beacon with a `find` datagram, and pairing continues exactly as above.
+
 What this protects against, and what it does not:
 
 - The token never crosses the wire, and neither does the code. The beacon carries nothing a
@@ -65,6 +68,9 @@ PAIR_ATTEMPTS = 3
 MSG_BEACON = "beacon"
 MSG_PAIR_REQUEST = "pair_request"
 MSG_PAIR_REPLY = "pair_reply"
+# The Mac asking one address for its beacon, for a PC that no broadcast reaches (another subnet,
+# a VPN). The answer is the beacon every listener already hears, so it discloses nothing new.
+MSG_FIND = "find"
 
 ERROR_NOT_PAIRING = "not_pairing"
 ERROR_REFUSED = "refused"
@@ -296,11 +302,11 @@ def broadcast_targets(port: int) -> list:
     broadcast as a backstop.
 
     ⚠ 255.255.255.255 alone is not enough and this is not theoretical: it leaves by the default
-    route only, so a PC with a second interface — a Hyper-V vEthernet switch is the common case,
-    and the owner's rig has one — announces on whichever the routing table prefers and may never
-    reach the LAN the Mac is on. Measured 10-09-2026: the PC beaconed steadily while no beacon
-    reached the Mac at all, and the Mac then paired against a stale id from an older beacon that
-    had got through, which is what produced `not_pairing`.
+    route only, so a PC with a second interface — a Hyper-V vEthernet switch is the common case —
+    announces on whichever the routing table prefers and may never reach the LAN the Mac is on.
+    Seen in practice: the PC beaconed steadily while no beacon reached the Mac at all, and the Mac
+    then paired against a stale id from an older beacon that had got through, which is what
+    produced `not_pairing`.
 
     The per-interface directed broadcast assumes a /24, because the stdlib exposes no netmask.
     A wrong guess costs one datagram that goes nowhere; the limited broadcast is still sent, so
@@ -390,6 +396,11 @@ class Announcer:
             self.host.active
             return self.host.outcome
 
+    def _beacon(self) -> bytes:
+        with self._lock:
+            pair_id = self.host.pair_id if self.host.active else None
+        return encode(beacon_msg(self.name, self.port_getter(), pair_id))
+
     def _run(self) -> None:
         try:
             sock = _udp_socket(self.bind_port)
@@ -399,14 +410,13 @@ class Announcer:
             return
         self.error = None
         next_beacon = 0.0
+        answered = {}
         try:
             while not self._stop.is_set():
                 now = time.monotonic()
                 if now >= next_beacon:
                     next_beacon = now + BEACON_INTERVAL_SECONDS
-                    with self._lock:
-                        pair_id = self.host.pair_id if self.host.active else None
-                    beacon = encode(beacon_msg(self.name, self.port_getter(), pair_id))
+                    beacon = self._beacon()
                     delivered = 0
                     # Only a caller asking for the limited broadcast wants the per-interface
                     # fan-out; a named address is honoured exactly, which keeps the tests off
@@ -440,6 +450,17 @@ class Announcer:
                     break
                 message = decode(data)
                 if message is None:
+                    continue
+                if message.get("type") == MSG_FIND:
+                    # At most one answer per address per interval, so the port is no amplifier.
+                    if now - answered.get(address[0], -BEACON_INTERVAL_SECONDS) >= BEACON_INTERVAL_SECONDS / 4:
+                        if len(answered) > 256:
+                            answered.clear()
+                        answered[address[0]] = now
+                        try:
+                            sock.sendto(self._beacon(), address)
+                        except OSError as exc:
+                            self.logger.warning("beacon to %s not sent: %s", address[0], exc)
                     continue
                 with self._lock:
                     reply = self.host.handle(message)
@@ -476,7 +497,35 @@ class Discovery:
         self._stop = threading.Event()
         self._thread = None
         self._sock = None
+        self._finding = None
+        self._find_serial = 0
+        self._next_find = 0.0
         self.error = None
+
+    def find(self, host: str, port: int = PAIRING_PORT) -> None:
+        """Ask `host` for its beacon, for a PC no broadcast reaches, and keep asking while
+        discovery runs so it stays listed. Returns at once; the PC appears in pcs() when it
+        answers. An empty host stops asking."""
+        host = (host or "").strip()
+        with self._lock:
+            self._find_serial += 1
+            serial = self._find_serial
+            self._finding = None
+            self._next_find = 0.0
+        if host:
+            # A name can take seconds to resolve, and this loop also carries the pairing replies.
+            threading.Thread(target=self._resolve, args=(host, int(port), serial),
+                             name="Beamer-find", daemon=True).start()
+
+    def _resolve(self, host: str, port: int, serial: int) -> None:
+        try:
+            address = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4][0]
+        except (OSError, IndexError) as exc:
+            self.logger.warning("could not resolve %s: %s", host, exc)
+            return
+        with self._lock:
+            if serial == self._find_serial:
+                self._finding = (address, port)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -545,6 +594,7 @@ class Discovery:
         self._sock = sock
         try:
             while not self._stop.is_set():
+                self._send_find(sock)
                 try:
                     data, address = sock.recvfrom(MAX_DATAGRAM_BYTES + 1)
                 except socket.timeout:
@@ -571,6 +621,17 @@ class Discovery:
         finally:
             self._sock = None
             sock.close()
+
+    def _send_find(self, sock) -> None:
+        with self._lock:
+            target = self._finding
+            if target is None or self.clock() < self._next_find:
+                return
+            self._next_find = self.clock() + BEACON_INTERVAL_SECONDS
+        try:
+            sock.sendto(encode({"type": MSG_FIND}), target)
+        except OSError as exc:
+            self.logger.warning("could not ask %s for its beacon: %s", target[0], exc)
 
     def _note_beacon(self, message: dict, address) -> None:
         name = message.get("name")

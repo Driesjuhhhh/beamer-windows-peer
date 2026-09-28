@@ -8,7 +8,7 @@ import app_config
 import protocol
 from dataclasses import replace
 
-from app_config import ConfigError, config_from_dict, config_to_dict, default_config, migrate_legacy_config
+from app_config import ConfigError, config_from_dict, config_to_dict, default_config
 
 
 BASE = {"host": "192.168.1.3", "port": 51820, "auth_token": "shared-token"}
@@ -25,6 +25,20 @@ class EdgeGlowConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             config_from_dict({**BASE, "edge_glow": "yes"})
 
+    def test_showing_where_the_pointer_lands_is_on_for_an_old_config_and_round_trips_off(self):
+        self.assertTrue(config_from_dict(dict(BASE)).shortcut_arrival)
+        config = config_from_dict({**BASE, "shortcut_arrival": False})
+        self.assertIs(config_to_dict(config)["shortcut_arrival"], False)
+        with self.assertRaises(ConfigError):
+            config_from_dict({**BASE, "shortcut_arrival": "yes"})
+
+    def test_what_a_switch_plays_defaults_to_the_crossing_and_round_trips(self):
+        self.assertEqual(config_from_dict(dict(BASE)).shortcut_arrival_style, "match")
+        config = config_from_dict({**BASE, "shortcut_arrival_style": "discharge"})
+        self.assertEqual(config_to_dict(config)["shortcut_arrival_style"], "discharge")
+        with self.assertRaises(ConfigError):
+            config_from_dict({**BASE, "shortcut_arrival_style": "sparkle"})
+
     def test_style_and_colour_default_to_the_original_look_and_round_trip(self):
         config = config_from_dict(dict(BASE))
         self.assertEqual((config.glow_style, config.glow_colour), ("glow", "signal"))
@@ -32,10 +46,57 @@ class EdgeGlowConfigTests(unittest.TestCase):
         saved = config_to_dict(config)
         self.assertEqual((saved["glow_style"], saved["glow_colour"]), ("beam", "sunset"))
 
-    def test_colour_choices_are_the_shared_palettes(self):
+    def test_colour_choices_are_the_shared_palettes_then_the_effect_packs(self):
+        import effects
         import tokens
 
-        self.assertEqual(app_config.GLOW_COLOURS, tuple(tokens.PALETTES))
+        self.assertEqual(app_config.GLOW_COLOURS, tuple(tokens.PALETTES) + effects.PACK_IDS)
+
+    def test_every_crossing_effect_and_pack_is_accepted_and_round_trips(self):
+        import effects
+
+        for style in effects.EFFECT_IDS:
+            with self.subTest(style=style):
+                saved = config_to_dict(config_from_dict({**BASE, "glow_style": style}))
+                self.assertEqual(config_from_dict(saved).glow_style, style)
+        for colour in effects.PACK_IDS:
+            with self.subTest(colour=colour):
+                saved = config_to_dict(config_from_dict({**BASE, "glow_colour": colour}))
+                self.assertEqual(config_from_dict(saved).glow_colour, colour)
+
+    def test_any_colour_goes_with_any_style(self):
+        config = config_from_dict({**BASE, "glow_style": "glow", "glow_colour": "ember"})
+        self.assertEqual((config.glow_style, config.glow_colour), ("glow", "ember"))
+        config = config_from_dict({**BASE, "glow_style": "discharge", "glow_colour": "sunset"})
+        self.assertEqual((config.glow_style, config.glow_colour), ("discharge", "sunset"))
+
+    def test_a_colour_resolves_to_todays_palette_else_its_pack(self):
+        import effects
+        import tokens
+
+        self.assertEqual(app_config.palette_colours("sunset"), tuple(tokens.PALETTES["sunset"]))
+        self.assertEqual(app_config.palette_colours("forge"), tuple(effects.pack("forge")[1]))
+        self.assertEqual(app_config.palette_colours("tartan"), tuple(tokens.PALETTES["signal"]))
+
+    def test_the_length_defaults_to_normal_and_round_trips(self):
+        self.assertEqual(config_from_dict(dict(BASE)).effect_length, "normal")
+        config = config_from_dict({**BASE, "effect_length": "long"})
+        self.assertEqual(config_to_dict(config)["effect_length"], "long")
+        with self.assertRaises(ConfigError):
+            config_from_dict({**BASE, "effect_length": "forever"})
+
+    def test_a_saved_warp_choice_reads_as_its_stand_in(self):
+        # Warp is offered nowhere for now; a PC that chose it keeps working.
+        config = config_from_dict({**BASE, "glow_style": "light_slit", "glow_colour": "neon",
+                                   "shortcut_arrival_style": "wormhole"})
+        self.assertEqual((config.glow_style, config.glow_colour, config.shortcut_arrival_style),
+                         ("beam", "colourful", "match"))
+        self.assertEqual(config_from_dict({**BASE, "glow_style": "wormhole"}).glow_style, "glow")
+        # Ink likewise.
+        config = config_from_dict({**BASE, "glow_style": "capillary", "glow_colour": "matcha",
+                                   "shortcut_arrival_style": "sumi_bloom"})
+        self.assertEqual((config.glow_style, config.glow_colour, config.shortcut_arrival_style),
+                         ("glow", "colourful", "match"))
 
     def test_rejects_an_unknown_style_or_colour(self):
         for key, value in (("glow_style", "sparkle"), ("glow_colour", "tartan")):
@@ -44,34 +105,39 @@ class EdgeGlowConfigTests(unittest.TestCase):
             self.assertIn(key, str(caught.exception))
 
 
-class MigrateLegacyConfigTests(unittest.TestCase):
-    def test_copies_without_touching_the_old_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            old_path = Path(directory) / "OpenKB" / "config.json"
-            old_path.parent.mkdir()
-            old_path.write_text(json.dumps(BASE), encoding="utf-8")
-            new_path = Path(directory) / "Beamer" / "config.json"
-            with mock.patch.object(app_config, "default_config_path", return_value=new_path), \
-                    mock.patch.object(app_config, "legacy_config_path", return_value=old_path):
-                self.assertTrue(migrate_legacy_config())
-                self.assertTrue(old_path.exists())
-                self.assertEqual(
-                    json.loads(new_path.read_text(encoding="utf-8")),
-                    json.loads(old_path.read_text(encoding="utf-8")),
-                )
-                # A second run must not overwrite the now-existing new config.
-                new_path.write_text(json.dumps({"changed": True}), encoding="utf-8")
-                self.assertFalse(migrate_legacy_config())
-                self.assertEqual(json.loads(new_path.read_text(encoding="utf-8")), {"changed": True})
+class AppearanceConfigTests(unittest.TestCase):
+    def test_defaults_to_system(self):
+        self.assertEqual(config_from_dict(dict(BASE)).appearance, "system")
 
-    def test_is_a_noop_with_no_legacy_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            old_path = Path(directory) / "OpenKB" / "config.json"
-            new_path = Path(directory) / "Beamer" / "config.json"
-            with mock.patch.object(app_config, "default_config_path", return_value=new_path), \
-                    mock.patch.object(app_config, "legacy_config_path", return_value=old_path):
-                self.assertFalse(migrate_legacy_config())
-                self.assertFalse(new_path.parent.exists())
+    def test_round_trips_light_and_dark(self):
+        for choice in ("light", "dark"):
+            config = config_from_dict({**BASE, "appearance": choice})
+            self.assertEqual(config_to_dict(config)["appearance"], choice)
+
+    def test_a_bad_value_falls_back_to_system_instead_of_erroring(self):
+        self.assertEqual(config_from_dict({**BASE, "appearance": "sepia"}).appearance, "system")
+
+
+
+class HandEditedListsTests(unittest.TestCase):
+    def test_an_unhashable_entry_is_a_config_error_not_a_crash(self):
+        base = {"host": "192.0.2.10", "port": 24820, "auth_token": "synthetic-token-for-tests"}
+        for bad in ([["middle"]], [{}]):
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                config_from_dict(dict(base, crossing_edge_parts=bad))
+        with self.assertRaises(ConfigError):
+            config_from_dict(dict(base, crossing_methods=[["edge"]]))
+
+
+
+class HideAddressesTests(unittest.TestCase):
+    def test_off_by_default_round_trips_and_refuses_a_non_bool(self):
+        base = {"host": "192.0.2.10", "port": 24820, "auth_token": "synthetic-token-for-tests"}
+        self.assertFalse(config_from_dict(base).hide_addresses)
+        config = config_from_dict(dict(base, hide_addresses=True))
+        self.assertTrue(config_to_dict(config)["hide_addresses"])
+        with self.assertRaises(ConfigError):
+            config_from_dict(dict(base, hide_addresses="yes"))
 
 
 if __name__ == "__main__":

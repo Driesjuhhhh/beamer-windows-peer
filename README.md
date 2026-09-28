@@ -12,7 +12,7 @@
 
 Push the pointer off the edge of the screen and it carries on onto the other machine, the way it
 would onto a second monitor. Or double-tap a key. The clipboard comes with you, your shortcuts
-still work, and nothing leaves your network.
+still work, and what you type never leaves your network.
 
 ## Download
 
@@ -20,7 +20,7 @@ Free, with no account. Every installer is on the [releases page](https://github.
 
 | Platform | Get it | Notes |
 |---|---|---|
-| macOS 13 or later, Apple silicon | `Beamer-<version>.dmg` | Signed and notarised by Apple. Not for Intel Macs yet |
+| macOS 13 or later, Apple silicon | `Beamer-<version>.dmg` | Signed and notarised by Apple. Not for Intel Macs |
 | Windows 10 and 11 | `Beamer-Setup-<version>.exe` | Not code-signed; see step 1 below |
 | Windows, through winget | `winget install KalkmanCode.Beamer` | The same installer, without the warning |
 
@@ -34,10 +34,11 @@ Free, with no account. Every installer is on the [releases page](https://github.
    so Windows says "Windows protected your PC" the first time: choose More info, then Run anyway.
    winget does not show that warning. Beamer on Windows runs as administrator, so expect one UAC
    prompt when you open it.
-2. **Pair them.** On the PC, press Pair a Mac; a six-digit code appears. On the Mac, open the
-   Pairing page, choose the PC from the list and type the code. It lasts a minute and works once.
-   If the PC never appears in the list, as on guest Wi-Fi or across a VPN, type the PC's address
-   on the Mac's Connection page and the same token on both machines' Connection pages instead.
+2. **Pair them.** Both Overview pages lead with pairing until it is done. On the PC, press Pair a
+   Mac; a six-digit code appears. On the Mac, choose the PC from the list and type the code. It
+   lasts a minute and works once. If the PC never appears in the list, as on guest Wi-Fi or across
+   a VPN, type the address the PC shows next to its code into "PC not listed?" on the Mac and press
+   Find. The PC joins the list, and you pair with the code as before.
 3. **Cross.** Push the Mac's pointer off the right-hand edge of its screen, or double-tap Right
    Option, and the Mac's keyboard and trackpad are on the PC. Push back through the PC's left edge,
    or double-tap again, to come home. The PC's own keyboard and mouse go the other way: push
@@ -48,16 +49,23 @@ machine's settings.
 
 ## Screenshots
 
-| Mac | Windows |
-|---|---|
-| <img src="assets/mac-overview.png" width="400" alt="Beamer's Overview page on the Mac: where input is, whether the link is up, and the two everyday controls"> | <img src="assets/windows-overview.png" width="400" alt="Beamer's Overview page on Windows: where input is, Send input and Pause crossing, and a switch for each direction"> |
-| <img src="assets/mac-design.png" width="400" alt="Beamer's Design page on the Mac: the notch and edge styles with live previews, and the colour schemes"> | <img src="assets/windows-design.png" width="400" alt="Beamer's Design page on Windows: the glow switch, Glow and Beam with live previews, and the colour schemes"> |
+In your own appearance: light if your GitHub is light, dark if it is dark.
+
+<table>
+<tr><th>Mac</th><th>Windows</th></tr>
+<tr><td><picture><source media="(prefers-color-scheme: light)" srcset="assets/mac-overview-light.png"><img src="assets/mac-overview-dark.png" width="400" alt="Beamer's Overview page on the Mac: where input is, whether the link is up, Send input and Pause crossing, and a switch for each direction"></picture></td><td><picture><source media="(prefers-color-scheme: light)" srcset="assets/windows-overview-light.png"><img src="assets/windows-overview-dark.png" width="400" alt="Beamer's Overview page on Windows: where input is, Send input and Pause crossing, and a switch for each direction"></picture></td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: light)" srcset="assets/mac-crossing-light.png"><img src="assets/mac-crossing-dark.png" width="400" alt="Beamer's Crossing page on the Mac: a drawing of the Mac and the PC side by side with the crossing edge lit, and the ways in"></picture></td><td><picture><source media="(prefers-color-scheme: light)" srcset="assets/windows-crossing-light.png"><img src="assets/windows-crossing-dark.png" width="400" alt="Beamer's Crossing page on Windows: a drawing of the Mac and the PC with the crossing edge lit, the ways in and where the Mac sits"></picture></td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: light)" srcset="assets/mac-design-light.png"><img src="assets/mac-design-dark.png" width="400" alt="Beamer's Design page on the Mac: a tile for each crossing style, shown at the edge, a corner or the notch, and the colours"></picture></td><td><picture><source media="(prefers-color-scheme: light)" srcset="assets/windows-design-light.png"><img src="assets/windows-design-dark.png" width="400" alt="Beamer's Design page on Windows: a tile for each crossing style, shown at the edge, a corner or the notch, and the colours"></picture></td></tr>
+</table>
 
 ## What it does
 
-- **Push through the edge.** Off the edge that faces the other machine, through a corner, or up
-  through the MacBook's notch. The pointer arrives at the same point along the border. The edge
-  lights up as you push, and the trackpad ticks at every quarter of the way through.
+- **Push through the edge.** Off the edge that faces the other machine, only along the parts of it
+  you pick, through a corner, or up through the MacBook's notch. The pointer arrives at the same
+  point along the border, on the right display however your monitors are stacked or staggered. The
+  edge lights up as you push, and the trackpad ticks as the push builds.
+- **See where you land.** A switch by the key or a menu plays a short arrival around the pointer on
+  the machine that takes over, so you never hunt for it.
 - **Or press a key.** Double-tap or hold a trigger key to switch without moving the pointer. Right
   Option on the Mac and Right Ctrl on the PC to start with; on either machine it can be any key
   that types nothing, recorded by pressing it.
@@ -76,14 +84,21 @@ machine's settings.
   forward side buttons cross in both directions otherwise.
 - **Mac gestures on Windows.** Three or four fingers up for Task View, down for the desktop, left
   and right to change virtual desktop, all from the Mac's trackpad.
-- **Make it yours.** The edge as a glow or a beam, five colour schemes, the notch as a beam or an
-  island with a meter, and how hard you push before it crosses.
+- **Make it yours.** Glow and Beam, or nine other effects in three families (Membrane, Sparks
+  and Instrument), each with colour packs of its own and any colour with any effect. The
+  notch as an outline or an island with a meter, how hard you push before it crosses, and settings
+  windows that follow the system's light or dark appearance or keep your own choice.
+- **Feels like your own.** Each machine sets how the other's pointer moves and scrolls on it, from
+  25% to 400%, and can reverse its scrolling, so a Mac trackpad and a PC mouse each feel right on
+  the other screen.
 - **Out of the way when it should be.** A full-screen app holds the edges, so a game or a film never
   loses the pointer; the trigger key still works. Pause crossing does the same by hand. A drag
   that reaches the edge stays a drag. Switch to a machine that is asleep and Beamer wakes it, where
   that machine answers wake-on-LAN: a PC usually does, a MacBook on Wi-Fi usually does not.
 - **Your network, nobody else's.** No server in the middle. The two machines talk to each other
-  directly, encrypted, and you pair them once with a six-digit code. More in [SECURITY.md](SECURITY.md).
+  directly, encrypted, and you pair them once with a six-digit code. The only thing that ever goes
+  further is a once-a-day check of GitHub's public releases for a newer version, which you can
+  switch off on Overview. More in [SECURITY.md](SECURITY.md).
 - **Free and open source.** No account, no subscription, GPL-3.0.
 
 ## Settings
@@ -94,13 +109,12 @@ About Beamer.
 
 | Page | Mac | Windows |
 |---|---|---|
-| Overview | Where input is, the link and its round trip, Send input and Pause crossing, a switch per direction, start at login | Where input is, the link and its round trip, Send input and Pause crossing, a switch per direction, start at sign-in |
-| Crossing | Ways in (edge, corner, notch, shortcut), which edge, never while dragging, resistance | Ways in (edge, corner, shortcut), the arrangement with the Mac, never while dragging, resistance |
-| Design | Notch style, edge glow or beam, colour scheme, haptics, with live previews | Glow on or off, Glow or Beam, colour scheme, with live previews |
-| Keyboard | Trigger key (recorded), double-tap or hold, what stays on this Mac, modifier style | Trigger key (recorded), double-tap or hold, what stays on this PC, modifier style |
-| Pairing | Choose a PC and type its code | Pair a Mac shows the code |
-| Connection | The PC's address, port and token | This PC's address, port and token |
-| Permissions / Firewall | Accessibility and Input Monitoring | Whether Windows Firewall lets the Mac in, with a one-button fix |
+| Overview | Pairing (first, until it is done), where input is, the link and its round trip, Send input and Pause crossing, a switch per direction, start at login, the update check | Pairing (first, until it is done), where input is, the link and its round trip, Send input and Pause crossing, a switch per direction, start at sign-in, the update check |
+| Permissions | Accessibility and Input Monitoring, with Relaunch Beamer | None; the firewall check is on Connection |
+| Crossing | A drawing of the arrangement, the ways in (edge, part of the edge, corner, notch), where the PC is, never while dragging, resistance, the shortcut | A drawing of the arrangement, the ways in (edge, part of the edge, corner), where your Mac is, never while dragging, resistance, the shortcut |
+| Keyboard | Same shortcuts or same positions, what stays on this Mac, the PC's pointer and scroll speed here | Same shortcuts or same positions, what stays on this PC, the Mac's pointer and scroll speed here |
+| Design | Crossing and switch styles, each playing as you point at it, colours, show where the pointer lands, notch style, trackpad ticks, the window's appearance (System, Light or Dark) | Crossing and switch styles, each playing as you point at it, at the edge or a corner, colours, show where the pointer lands, the window's appearance (System, Light or Dark) |
+| Connection | Hide addresses, the PC's address, port and token | Whether Windows Firewall lets the Mac in, with a one-button fix; hide addresses; this PC's address, port and token |
 
 Which edge of the Mac leads to the PC is one setting either machine can change; the two keep it in
 step, so the border is always the same one seen from both ends.
@@ -114,12 +128,14 @@ step, so the border is always the same one seen from both ends.
 - **AltGr is out of reach from the Mac.**
 - **A dead key typed on the PC does not cross**, so an accent typed as two keys on the PC's
   layout arrives on the Mac without it. Shortcuts and letters follow each machine's own layout.
-- **Intel Macs are not supported yet.** The Mac app is built for Apple silicon only.
+- **Intel Macs are not supported.** The Mac app is built for Apple silicon only.
 - **The Windows installer is unsigned.** SmartScreen warns until it has a download history; winget
   avoids it.
 - **macOS 27 beta 4 could block a signed app's local-network access** even when Terminal could
-  reach the PC. The DMG includes `Beamer Tunnel.command` for that case: open it, leave its window
-  running, then open Beamer, which uses the tunnel only when its direct connection is blocked.
+  reach the PC. The released macOS 27 does not, so the DMG no longer carries a workaround; for that
+  beta, `mac_app/Beamer Tunnel.command` in this repository forwards the link over SSH: open it,
+  leave its window running, then open Beamer, which uses the tunnel only when its direct connection
+  is blocked.
 
 ## In detail
 
@@ -161,18 +177,21 @@ time you overshoot a close button. The default is 120 points; zero switches on c
 | Way in | Where it triggers | Mac | PC |
 |---|---|---|---|
 | Shortcut | Double-tap the trigger key, or hold it | Yes | Yes |
-| Edge | The whole of one outer edge of the desktop | Yes | Yes |
+| Edge | The whole of one outer edge | Yes | Yes |
+| Part of the edge | Only the thirds of that edge you pick (start, middle, end), measured on the display under the pointer | Yes | Yes |
 | Corner | An 8pt box in one corner, needing a diagonal push | Yes | Yes |
 | Notch | The top edge, only within the notch's width | Yes | No |
 
-Any combination can be on. On the Mac, shortcut and the right-hand edge are on to start with.
+Any combination can be on, except Edge and Part of the edge, which exclude each other. On the Mac,
+shortcut and the right-hand edge are on to start with.
 
-- The notch has no pixels to light, so a push there draws on the notch itself. Beam, the default,
+- The notch has no pixels to light, so a push there draws on the notch itself. Outline, the default,
   runs a comet of light round a small tab under the notch that brightens and speeds up with the
   push. Island springs a black island out of the notch with a four-segment meter; with Reduce
   Motion on it stays one size and fades with the push.
-- Only the outer boundary of the whole desktop counts, so an edge between two displays on the same
-  machine behaves as the system intends.
+- An edge counts wherever no display of the same machine lies beyond it, so an edge between two
+  displays behaves as the system intends, and the edge of a MacBook under a wider external display
+  still crosses.
 - The pointer arrives where it left: 42% of the way down the Mac's right edge is 42% of the way
   down the PC's left edge, on whichever monitor owns it.
 - Crossing never fires while a mouse button is held, because a drag that reaches the edge is a drag.
@@ -181,7 +200,8 @@ Any combination can be on. On the Mac, shortcut and the right-hand edge are on t
 - Only one machine's input is on the other at a time. While the Mac drives the PC, pushing the PC's
   own mouse through the edge sends the Mac's input home and takes the PC's mouse across behind it.
 - Either machine's own switch, the menu item or the trigger key, sends the other's input home, so a
-  way back never depends on the edge alone.
+  way back never depends on the edge alone. The PC's edge facing the Mac leads home even when the
+  Mac has only its shortcut on.
 - Switching to a PC that is asleep sends wake-on-LAN. The PC's hardware address is read from the
   Mac's ARP table after a successful connection, never typed.
 
@@ -263,7 +283,8 @@ carries the Mac's clipboard to the PC, and switching back carries the PC's to th
 holds both an image and text, both cross and the pasting app picks. The caps keep the switch
 prompt: 256KB of text and an 8MB image as PNG. Over a cap, that half is left alone rather than
 truncated. The PC converts to and from the Windows clipboard's DIB format itself, using the Qt it
-already ships.
+already ships. A switch sends the clipboard only when it has changed since it last crossed, so a
+large image is not re-sent every time.
 
 </details>
 
@@ -291,6 +312,19 @@ proving it knows the six-digit code. What that does and does not protect against
 </details>
 
 <details>
+<summary><strong>Update check</strong></summary>
+
+Once a day, and at start, Beamer asks GitHub's public releases API for the latest release of this
+repository and compares its version with its own. A new minor or major version is always offered;
+a patch release (1.4.0 to 1.4.1) only when its release notes ask for it, so a run of small fixes
+does not nag. Drafts and pre-releases never count and nothing is downloaded. When a newer one is out, the menu says Beamer X is available and Overview offers a
+Download button that opens the release page. The request is an ordinary HTTPS request, so GitHub
+sees the address it came from, as it would for a browser. Switch it off with Check for updates on
+Overview.
+
+</details>
+
+<details>
 <summary><strong>Windows specifics</strong></summary>
 
 The installer puts Beamer in `%LOCALAPPDATA%\Beamer` for the current user with a Start menu
@@ -304,7 +338,7 @@ else touches autostart.
 
 Beamer needs two inbound rules on Private networks: TCP 24820 for input and UDP 24821 for pairing,
 both below the range Windows and macOS hand out for themselves. The app adds them on its first
-elevated start. The Firewall page says in one sentence whether the Mac can get in and offers one
+elevated start. Connection says in one sentence whether the Mac can get in and offers one
 button for whichever of three things usually stops it: the rule is missing (it adds it), Cancel was
 pressed on Windows' own "allow this app" prompt, which writes a block rule that beats any allow rule
 (it removes the block and adds the rule), or the network is classed as public (it marks the network
@@ -399,9 +433,10 @@ It runs the tests, builds `Beamer.exe` and compiles `Beamer-Setup.iss` with Inno
 GPL-3.0; see [LICENSE](LICENSE). Releases up to and including 1.2.0 were MIT.
 
 Beamer is free and made by one person. Issues are welcome and read, but there is no guarantee of a
-reply. Report security problems privately, as [SECURITY.md](SECURITY.md) describes. Home page:
+reply. Before a pull request, read [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately, as [SECURITY.md](SECURITY.md) describes. Home page:
 [kalkmancode.co.uk/beamer](https://kalkmancode.co.uk/beamer).
 
-A bug report is far easier to act on with each machine's log attached. Beamer keeps one on each:
-`~/Library/Logs/Beamer/Beamer.log` on the Mac and `%LOCALAPPDATA%\Beamer\Beamer.log` on Windows.
+A bug report is far easier to act on with each machine's log attached. Open log folder in each
+machine's menu opens it: `~/Library/Logs/Beamer/Beamer.log` on the Mac and
+`%LOCALAPPDATA%\Beamer\Beamer.log` on Windows.
 They hold your machines' names and local network addresses, so look them over before posting.
