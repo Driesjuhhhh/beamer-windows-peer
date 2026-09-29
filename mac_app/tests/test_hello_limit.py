@@ -30,6 +30,7 @@ class HelloFrameLimitTests(unittest.TestCase):
         theirs = protocol.SecureSession("t")
         mine = protocol.SecureSession("t")
         mine.accept_preamble(theirs.preamble())
+        theirs.accept_preamble(mine.preamble())
         frame = theirs.seal(protocol.hello_msg(return_edge="left", resistance_px=120))
         self.assertLess(len(frame) - protocol.HEADER_SIZE, protocol.HELLO_MAX_BYTES)
         sender.sendall(frame)

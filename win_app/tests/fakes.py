@@ -85,7 +85,7 @@ class FakeDesktop:
 
 
 class SecureClient:
-    """The Mac's half of a v4 connection, driven from a test over a real
+    """The Mac's half of a connection, driven from a test over a real
     socket: sends its preamble at once and reads the receiver's on first use,
     so it can be built before the session thread that answers it has started.
     Frames are sealed and opened with the real cipher, never mocked away."""
@@ -95,12 +95,17 @@ class SecureClient:
         self.session = protocol.SecureSession(token)
         sock.sendall(self.session.preamble())
 
+    def _preamble(self):
+        # Both keys need the receiver's prefix, so neither side of a test can seal or open without it.
+        if self.session.peer_prefix is None:
+            protocol.recv_preamble(self.sock, self.session)
+
     def send(self, message):
+        self._preamble()
         protocol.send_msg(self.sock, self.session, message)
 
     def recv(self):
-        if self.session.peer_prefix is None:
-            protocol.recv_preamble(self.sock, self.session)
+        self._preamble()
         return protocol.recv_msg(self.sock, self.session)
 
     def settimeout(self, value):

@@ -31,28 +31,36 @@ from gestures import DOCK_CONTROL_TYPE, MAGNIFY_TYPE, SWIPE_TYPE
 from input_injector_mac import INJECTED_MARK
 
 
-def receiver_for(controller, token="synthetic-token"):
-    """A receiver-side session that can open what `controller` seals."""
-    peer = protocol.SecureSession(token)
-    peer.accept_preamble(controller.session.preamble())
-    return peer
+def link(controller, sock=None, token="synthetic-token"):
+    """Hand `controller` a FakeSocket as _connect_once would: a new session
+    with the preambles exchanged, so both ends hold this connection's keys."""
+    sock = sock or FakeSocket()
+    sock.peer = protocol.SecureSession(token)
+    controller.session = protocol.SecureSession(controller.cfg.auth_token)
+    controller.session.accept_preamble(sock.peer.preamble())
+    sock.peer.accept_preamble(controller.session.preamble())
+    sock.mac_preamble = controller.session.preamble()
+    controller.sock = sock
+    return sock
 
 
 def sent_messages(controller, sock):
     """Open every frame `controller` sent over a FakeSocket, in order --
-    counters must advance, so a frame can only be read in sequence."""
-    peer = receiver_for(controller)
-    return [peer.open(payload[protocol.HEADER_SIZE:]) for payload in sock.sent]
+    counters must advance, so a frame can only be read in sequence. A fresh
+    opener with the receiver's prefix each call, so this can be asked twice."""
+    opener = protocol.SecureSession(sock.peer._token, prefix=sock.peer.prefix)
+    opener.accept_preamble(sock.mac_preamble)
+    return [opener.open(payload[protocol.HEADER_SIZE:]) for payload in sock.sent if payload != sock.mac_preamble]
 
 
 def seed_receiver_reply(sock, *messages, token="synthetic-token"):
-    """Queue a receiver's preamble and sealed replies on a FakeSocket, as a
-    Windows receiver holding `token` would send them."""
-    peer = protocol.SecureSession(token)
-    sock.inbound.extend(peer.preamble())
-    for message in messages:
-        sock.inbound.extend(peer.seal(message))
-    return peer
+    """Queue a receiver's preamble on a FakeSocket, and replies it seals once
+    the Mac's preamble has gone out, as a Windows receiver holding `token`
+    would send them: a reply's key needs both prefixes."""
+    sock.peer = protocol.SecureSession(token)
+    sock.inbound.extend(sock.peer.preamble())
+    sock.pending.extend(messages)
+    return sock.peer
 
 
 class FakeQuartz:
@@ -172,6 +180,9 @@ class FakeSocket:
         self.closed = False
         self.shutdown_called = False
         self.inbound = bytearray()
+        self.peer = None
+        self.mac_preamble = None
+        self.pending = []
 
     def settimeout(self, value):
         self.timeout = value
@@ -183,6 +194,13 @@ class FakeSocket:
         self.sent.append(payload)
 
     def recv(self, size):
+        if self.peer is not None and self.peer.peer_prefix is None and self.sent:
+            self.mac_preamble = self.sent[0]
+            self.peer.accept_preamble(self.mac_preamble)
+        if self.pending and self.mac_preamble is not None:
+            for message in self.pending:
+                self.inbound.extend(self.peer.seal(message))
+            self.pending = []
         if not self.inbound:
             raise TimeoutError("no synthetic reply")
         chunk = bytes(self.inbound[:size])
@@ -253,6 +271,7 @@ class FrameDecoderTests(unittest.TestCase):
         self.windows = protocol.SecureSession("synthetic-token")
         self.mac = protocol.SecureSession("synthetic-token")
         self.mac.accept_preamble(self.windows.preamble())
+        self.windows.accept_preamble(self.mac.preamble())
         self.decoder = FrameDecoder(self.mac)
 
     def test_decodes_fragmented_frames(self):
@@ -276,6 +295,7 @@ class FrameDecoderTests(unittest.TestCase):
 
     def test_wrong_token_fails_authentication(self):
         stranger = protocol.SecureSession("another-token", prefix=self.windows.prefix)
+        stranger.accept_preamble(self.mac.preamble())
         with self.assertRaises(protocol.AuthenticationError):
             self.decoder.feed(stranger.seal(protocol.ack_msg(1)))
 
@@ -589,7 +609,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_double_tap_right_option_only_flips_redirect_flag(self):
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         down = {
             FakeQuartz.kCGKeyboardEventKeycode: 0x3D,
             "flags": FakeQuartz.kCGEventFlagMaskAlternate,
@@ -629,7 +649,7 @@ class ControllerTests(unittest.TestCase):
         alerts = []
         self.controller.on_user_alert = lambda title, message: alerts.append((title, message))
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         self.controller.redirecting = True
         self.controller.connected_at = 10.0
         self.controller.last_ack_at = 10.0
@@ -648,7 +668,7 @@ class ControllerTests(unittest.TestCase):
         # double-tap would "succeed" into a void. It must now be detected and
         # torn down the same way regardless of redirect state.
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         self.controller.redirecting = False
         self.controller.connected_at = 10.0
         self.controller.last_ack_at = 10.0
@@ -661,7 +681,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_watchdog_sends_idle_ping_after_a_second_of_silence(self):
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         self.controller.connected_at = 10.0
         self.controller.last_ack_at = 10.0
         self.controller.last_send_at = 10.0
@@ -673,7 +693,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_watchdog_suppresses_idle_ping_while_traffic_flows(self):
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         self.controller.connected_at = 10.0
         self.controller.last_ack_at = 10.0
         self.controller.last_send_at = 11.5
@@ -689,7 +709,7 @@ class ControllerTests(unittest.TestCase):
         # while Windows is already driving this Mac corrupts the pair. This
         # asserts the invariant, which the current code violates.
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         self.controller.receiving = True
         self.controller.set_redirecting(True)
         self.assertFalse(
@@ -702,7 +722,7 @@ class ControllerTests(unittest.TestCase):
         # the edge never fired, and the menu's switch only said Windows was
         # already driving. Switching now sends the PC's input home instead.
         sent_home = []
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.receiving = True
         self.controller.send_peer_home = lambda: sent_home.append(True) or True
         self.assertTrue(self.controller.set_redirecting(True))
@@ -710,7 +730,7 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(self.controller.redirecting)
 
     def test_switching_while_receiving_with_the_pc_unreachable_is_refused(self):
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.receiving = True
         self.controller.send_peer_home = lambda: False
         self.assertFalse(self.controller.set_redirecting(True))
@@ -718,7 +738,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_this_macs_trigger_sends_the_pcs_input_home_while_receiving(self):
         sent_home = []
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.receiving = True
         self.controller.send_peer_home = lambda: sent_home.append(True) or True
         down = {FakeQuartz.kCGKeyboardEventKeycode: 0x3D, "flags": FakeQuartz.kCGEventFlagMaskAlternate}
@@ -734,7 +754,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_the_pcs_injected_trigger_is_not_this_macs_while_receiving(self):
         sent_home = []
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.receiving = True
         self.controller.send_peer_home = lambda: sent_home.append(True) or True
         down = {
@@ -748,7 +768,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(sent_home, [])
 
     def test_sending_to_windows_switched_off_refuses_the_switch(self):
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.cfg.send_to_windows = False
         self.assertFalse(self.controller.set_redirecting(True))
         self.assertFalse(self.controller.redirecting)
@@ -756,7 +776,7 @@ class ControllerTests(unittest.TestCase):
     def test_sending_to_windows_switched_off_still_sends_the_pcs_input_home(self):
         # Each switch covers one direction: the PC's input on this Mac still goes home.
         sent_home = []
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.cfg.send_to_windows = False
         self.controller.receiving = True
         self.controller.send_peer_home = lambda: sent_home.append(True) or True
@@ -787,7 +807,7 @@ class ControllerTests(unittest.TestCase):
         # key-up went missing (e.g. a tap restart never delivered it), which
         # silently killed the double-tap trigger on the very next press.
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         down = {
             FakeQuartz.kCGKeyboardEventKeycode: 0x3D,
             "flags": FakeQuartz.kCGEventFlagMaskAlternate | 0x0040,
@@ -849,7 +869,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_an_ack_without_an_object_body_drops_the_connection_not_the_reader(self):
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         with self.assertRaises(protocol.ProtocolError):
             self.controller._handle_inbound({"type": protocol.MSG_ACK, "data": None})
 
@@ -861,7 +881,7 @@ class ControllerTests(unittest.TestCase):
             lambda: self.controller._event_tap_callback(None, FakeQuartz.kCGEventTapDisabledByTimeout, {}, None),
         ):
             with self.subTest(way_home=way_home):
-                self.controller.sock = FakeSocket()
+                link(self.controller)
                 self.controller.event_tap = object()
                 self.controller.set_redirecting(True)
                 self.controller._drain_outbound()
@@ -881,7 +901,7 @@ class ControllerTests(unittest.TestCase):
             lambda: self.controller._thread_entry("synthetic", lambda: (_ for _ in ()).throw(RuntimeError())),
         ):
             with self.subTest(way_home=way_home):
-                self.controller.sock = FakeSocket()
+                link(self.controller)
                 self.controller.set_redirecting(True)
                 FakeQuartz.reset_cursor_spies()
                 way_home()
@@ -911,7 +931,7 @@ class ControllerTests(unittest.TestCase):
         # The hello carries the way home, which is how Windows knows which of
         # its own edges leads back here before this Mac has ever crossed.
         self.assertEqual(
-            sent_messages(controller, types.SimpleNamespace(sent=sock.sent[1:])),
+            sent_messages(controller, sock),
             [protocol.hello_msg(return_edge="left", resistance_px=120)],
         )
         self.assertNotIn(b"synthetic-token", b"".join(sock.sent))
@@ -1074,7 +1094,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_set_redirecting_off_resets_mouse_accumulators(self):
         sock = FakeSocket()
-        self.controller.sock = sock
+        link(self.controller, sock)
         self.controller.redirecting = True
         self.controller.translator._move_accum_x = 0.4
         self.controller.translator._move_accum_y = -0.4
@@ -1100,7 +1120,7 @@ class ClipboardSyncTests(unittest.TestCase):
             clock=self.clock,
         )
         self.sock = FakeSocket()
-        self.controller.sock = self.sock
+        link(self.controller, self.sock)
 
     def _drain_outbound(self):
         while not self.controller.outbound.empty():
@@ -1238,7 +1258,7 @@ class CursorPinningTests(unittest.TestCase):
             clock=self.clock,
         )
         self.sock = FakeSocket()
-        self.controller.sock = self.sock
+        link(self.controller, self.sock)
 
     def test_pin_captured_and_association_disabled_at_redirect_start(self):
         self.assertTrue(self.controller.set_redirecting(True))
@@ -1296,7 +1316,7 @@ class CursorPinningTests(unittest.TestCase):
         controller = KVMController(
             make_config(), logger=logger, quartz=FakeQuartz, clock=self.clock,
         )
-        controller.sock = FakeSocket()
+        link(controller)
         with self.assertLogs(logger, level="INFO") as captured:
             controller.set_redirecting(True)
             controller.set_redirecting(False)
@@ -1334,7 +1354,7 @@ class CursorPinningTests(unittest.TestCase):
         controller = KVMController(
             make_config(), logger=logger, quartz=ErroringQuartz, clock=self.clock,
         )
-        controller.sock = FakeSocket()
+        link(controller)
         controller.set_redirecting(True)
         move_event = {
             ErroringQuartz.kCGMouseEventDeltaX: 4,
@@ -1365,7 +1385,7 @@ class OverlayGestureTests(unittest.TestCase):
             clock=self.clock,
         )
         self.sock = FakeSocket()
-        self.controller.sock = self.sock
+        link(self.controller, self.sock)
 
     def test_overlay_gesture_translated_and_enqueued_while_redirecting(self):
         self.controller.redirecting = True
@@ -1536,7 +1556,7 @@ class GestureWiringTests(unittest.TestCase):
         controller = self._controller(lambda event: FakeGestureEvent(deltaX=1.0))
         controller.redirecting = True
         sock = FakeSocket()
-        controller.sock = sock
+        link(controller, sock)
         returned = controller._event_tap_callback(None, SWIPE_TYPE, object(), None)
         self.assertIsNone(returned)
         drained = []
@@ -1757,7 +1777,7 @@ class CrossingWiringTests(unittest.TestCase):
             clock=self.clock,
             desktop_bounds=lambda: self.BOUNDS,
         )
-        controller.sock = FakeSocket()
+        link(controller)
         controller.on_crossing = lambda kind, step: self.feedback.append((kind, step))
         return controller
 
@@ -2088,7 +2108,7 @@ class RoundTripTests(unittest.TestCase):
         self.controller = KVMController(
             crossing_config(), logger=quiet_logger(), quartz=FakeQuartz, clock=self.clock
         )
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.redirecting = True
 
     def _send(self):
@@ -2142,7 +2162,7 @@ class RoundTripTests(unittest.TestCase):
     def test_nothing_is_shown_when_the_link_is_down(self):
         self._ack(self._send(), 0.02)
         self.controller._connection_failed("Windows stopped responding")
-        self.controller.sock = FakeSocket()
+        link(self.controller)
         self.controller.redirecting = True
         self.assertIsNone(self.controller.round_trip_ms)
 

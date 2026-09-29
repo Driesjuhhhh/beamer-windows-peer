@@ -1,7 +1,7 @@
 import unittest
 
 from bridge import KVMController
-from test_bridge import FakeClock, FakeQuartz, FakeSocket, crossing_config, quiet_logger
+from test_bridge import FakeClock, FakeQuartz, FakeSocket, crossing_config, link, quiet_logger
 
 
 class UpdateConfigWhileRedirectingTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class UpdateConfigWhileRedirectingTests(unittest.TestCase):
             clock=FakeClock(),
             desktop_bounds=lambda: (0.0, 0.0, 1728.0, 1117.0),
         )
-        self.controller.sock = FakeSocket()
+        link(self.controller)
 
     def test_update_config_while_redirecting_restores_cursor_association(self):
         self.controller.set_redirecting(True)

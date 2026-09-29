@@ -113,6 +113,7 @@ class ClipboardMessageTests(unittest.TestCase):
         sender = protocol.SecureSession("shared-token")
         receiver = protocol.SecureSession("shared-token")
         receiver.accept_preamble(sender.preamble())
+        sender.accept_preamble(receiver.preamble())
         frame = sender.seal(protocol.clipboard_msg("shot.png", PNG))
         message = receiver.open(frame[protocol.HEADER_SIZE:])
         self.assertEqual(message["data"]["text"], "shot.png")

@@ -5,12 +5,19 @@ them matters. This is what it protects, what it does not, and how to report a pr
 
 ## What the link protects
 
-- **Every frame is encrypted and authenticated.** Both apps derive a key from the shared token with
-  HKDF-SHA256 and seal every frame with ChaCha20-Poly1305. A peer that cannot decrypt the first
-  frame does not hold the token, and the connection goes no further.
+- **Every frame is encrypted and authenticated.** Each connection opens with both machines sending
+  a fresh random prefix. Each direction of that connection then gets its own key, derived with
+  HKDF-SHA256 from the shared token and both prefixes, and every frame is sealed with
+  ChaCha20-Poly1305. A peer that cannot decrypt the first frame does not hold the token, and the
+  connection goes no further.
 - **The token is never sent.** Not when connecting, and not when pairing.
-- **Captured frames cannot be replayed.** Each frame carries a counter the receiver requires to
-  advance by one, and every connection starts from a fresh random nonce prefix.
+- **Recorded traffic cannot be played back.** Within a connection, each frame carries a counter the
+  receiver requires to advance by one, so a frame sent twice, dropped or reordered ends the
+  connection. A whole recorded connection sent again as a new one fails too: the receiver's fresh
+  prefix is part of the key, so frames recorded under an earlier one do not decrypt. Before 1.4.1
+  the key was the same for every connection, and that whole-connection replay worked: someone on
+  your network who recorded a session could send it again, and the keystrokes, clicks and clipboard
+  in it would be repeated. Update both machines to 1.4.1 or later.
 - **Pairing is a six-digit code that lasts a minute and works once.** The two machines agree a
   token over X25519, and each proves it knows the code with an HMAC keyed from it (scrypt, salted
   per code). The code itself never crosses the network. The PC uses up its code on the first
@@ -43,6 +50,9 @@ them matters. This is what it protects, what it does not, and how to report a pr
   Pairing again replaces it.
 - **Malware on either machine.** Anything that can read your keyboard or the settings file on one
   machine already has what Beamer would protect.
+- **A token that leaks later.** The keys come from the token and the prefixes, and the prefixes
+  are sent in the clear, so anyone who records your traffic and later learns the token can decrypt
+  the recording. Pairing again gives a new token.
 - **Traffic analysis.** Encryption hides what you type, not when. Someone watching the network can
   see that the two machines are talking and the size and timing of frames. The protocol version
   byte at the start of each connection is sent in the clear.

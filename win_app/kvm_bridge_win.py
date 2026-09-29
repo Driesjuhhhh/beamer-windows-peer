@@ -1766,6 +1766,12 @@ class WindowsApplication(QWidget):
         self._run_firewall(firewall_win.status, "Checking…")
 
     def _firewall_action(self) -> None:
+        # Only the built exe changes the firewall, by the button or on its own. From source the
+        # executable is python.exe, and repair() replaces Beamer's rules by name, so a test run on
+        # the PC took the installed Beamer's rules with it and cut the Mac's link (29-09-2026).
+        if not getattr(sys, "frozen", False):
+            LOGGER.info("Running from source; the firewall is left as it is")
+            return
         advice = self._firewall_advice
         if advice is None or advice.action is None:
             return
@@ -2005,10 +2011,10 @@ class WindowsApplication(QWidget):
 
     def start(self) -> None:
         self.update_checker.start()
-        if firewall_win.is_elevated():
+        if getattr(sys, "frozen", False) and firewall_win.is_elevated():
             # Beamer's own rules before any socket opens: a listener Windows has no rule for makes
             # it ask, and a click on Allow there writes rules for every network, public ones too,
-            # where Beamer's are for private networks only.
+            # where Beamer's are for private networks only. Not from source: see _firewall_action.
             threading.Thread(target=self._rules_then_listen, name="Beamer-firewall-first", daemon=True).start()
         else:
             self._listen()

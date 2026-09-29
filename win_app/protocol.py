@@ -1,18 +1,26 @@
 """Wire protocol shared by mac_app/bridge.py and win_app/receiver.py.
 
-The link is encrypted and authenticated with ChaCha20-Poly1305 under a key both
-sides derive from the shared token (HKDF-SHA256); the token itself never crosses
-the wire, and a peer that cannot produce a valid tag does not hold it.
+The link is encrypted and authenticated with ChaCha20-Poly1305; the shared
+token never crosses the wire, and a peer that cannot produce a valid tag does
+not hold it.
 
 A connection opens with one cleartext preamble each way -- WIRE_MAGIC, one
-version byte, and that side's 8-byte nonce prefix -- so a version mismatch
-produces a readable status instead of undecryptable garbage. Every frame after
-that is a 4-byte big-endian length, then a 4-byte big-endian counter, then the
-ciphertext with its tag; the length covers the counter and ciphertext. The nonce
-is prefix + counter, each side counting its own frames from 1, and the receiver
-rejects any counter that is not the next one, so a captured frame cannot be
-replayed. A reconnect draws a new prefix, so a counter never repeats under one
-key and prefix.
+version byte, and that side's 8-byte nonce prefix, drawn fresh per connection
+-- so a version mismatch produces a readable status instead of undecryptable
+garbage. Each direction then has its own key, HKDF-SHA256 over the token with
+the sender's prefix and the receiver's prefix in `info`, so nothing is sealed
+until the peer's preamble is in. Every frame after that is a 4-byte big-endian
+length, then a 4-byte big-endian counter, then the ciphertext with its tag; the
+length covers the counter and ciphertext. The nonce is prefix + counter, each
+side counting its own frames from 1, and the receiver rejects any counter that
+is not the next one.
+
+What that stops: a frame played again, dropped or reordered inside a
+connection fails the counter; a whole recorded connection played into a new
+one fails the tag, because the receiver's fresh prefix is part of the key its
+peer had to seal under; a side's own frames reflected back fail the tag,
+because the two directions' keys differ. What it does not give is forward
+secrecy: anyone who later learns the token can read a recording made before.
 """
 
 import base64
@@ -37,7 +45,9 @@ MAX_COUNTER = 0xFFFFFFFF
 # pairing and a mixed-version pair for no gain.
 WIRE_MAGIC = b"BEAMY"
 PREAMBLE_SIZE = len(WIRE_MAGIC) + 1 + NONCE_PREFIX_SIZE
-PROTOCOL_VERSION = 4
+# 5: per-connection keys bound to both prefixes (1.4.1). 4 keyed every connection alike from the
+# token, so a recorded connection could be played into a new one whole.
+PROTOCOL_VERSION = 5
 
 # Both ports sit below 49152 on purpose. Windows and macOS both hand out 49152-65535 as
 # ephemeral ports, and Windows lets WinNAT reserve whole 100-port blocks from that range that
@@ -49,12 +59,8 @@ PAIRING_PORT = 24821
 # What DEFAULT_PORT used to be. A config still carrying it was never chosen by
 # anyone, so it is migrated rather than honoured; a port a user picked is left alone.
 LEGACY_DEFAULT_PORT = 51820
-# Wire constant, deliberately kept as the pre-rename name: changing it would break an existing
-# pairing and a mixed-version pair for no gain.
-KEY_SALT = b"beamy-key-v1"
-# Wire constant, deliberately kept as the pre-rename name: changing it would break an existing
-# pairing and a mixed-version pair for no gain.
-KEY_INFO = b"beamy-input-channel"
+KEY_SALT = b"beamer-link-v5"
+KEY_INFO = b"beamer-frames"
 CLIPBOARD_MAX_BYTES = 256 * 1024
 # The clipboard goes out ahead of the focus message on every switch, sealed as one frame and
 # buffered whole on both sides, so the image cap is a bound on how late the switch lands, not on
@@ -135,27 +141,34 @@ class VersionMismatch(ProtocolError):
         self.peer_version = peer_version
 
 
-def derive_key(token: str) -> bytes:
-    return HKDF(algorithm=hashes.SHA256(), length=32, salt=KEY_SALT, info=KEY_INFO).derive(
-        token.encode("utf-8")
-    )
+def derive_key(token: str, sender_prefix: bytes, receiver_prefix: bytes) -> bytes:
+    """The key for the frames one side seals and the other opens, on one
+    connection only: both prefixes are drawn fresh per connection, and their
+    order is the direction."""
+    return HKDF(
+        algorithm=hashes.SHA256(), length=32, salt=KEY_SALT, info=KEY_INFO + sender_prefix + receiver_prefix
+    ).derive(token.encode("utf-8"))
 
 
 class SecureSession:
     """One connection's cipher state for both directions. Build a new one per
     connection: it draws a fresh nonce prefix and starts both counters at zero.
+    Neither key exists until accept_preamble, so nothing can be sealed or
+    opened before the peer's prefix is known.
     `send_lock` serialises sealing, and send_msg holds it across the write too,
     so counters are never reused and frames reach the wire in counter order;
     `open` is expected to run on a single reader thread per connection."""
 
     def __init__(self, token: str, prefix: bytes = None):
-        self._cipher = ChaCha20Poly1305(derive_key(token))
+        self._token = token
         self.prefix = os.urandom(NONCE_PREFIX_SIZE) if prefix is None else bytes(prefix)
         if len(self.prefix) != NONCE_PREFIX_SIZE:
             raise ValueError("nonce prefix must be 8 bytes")
         self.send_lock = threading.RLock()
         self._send_counter = 0
+        self._send_cipher = None
         self.peer_prefix = None
+        self._recv_cipher = None
         self._recv_counter = 0
 
     def preamble(self) -> bytes:
@@ -168,23 +181,30 @@ class SecureSession:
         if version != PROTOCOL_VERSION:
             raise VersionMismatch(version)
         peer_prefix = data[len(WIRE_MAGIC) + 1:]
-        # A reflected preamble would let our own frames be played back to us.
+        if self.peer_prefix is not None:
+            raise ProtocolError("second preamble on one connection")
+        # Equal prefixes would make both directions one key.
         if peer_prefix == self.prefix:
             raise ProtocolError("peer echoed this side's nonce prefix")
+        with self.send_lock:
+            self._send_cipher = ChaCha20Poly1305(derive_key(self._token, self.prefix, peer_prefix))
+        self._recv_cipher = ChaCha20Poly1305(derive_key(self._token, peer_prefix, self.prefix))
         self.peer_prefix = peer_prefix
 
     def seal(self, msg: dict) -> bytes:
         body = json.dumps(msg).encode("utf-8")
         with self.send_lock:
+            if self._send_cipher is None:
+                raise ProtocolError("nothing is sealed before the peer's preamble")
             if self._send_counter >= MAX_COUNTER:
                 raise ProtocolError("frame counter exhausted; reconnect")
             self._send_counter += 1
             counter = struct.pack(">I", self._send_counter)
-            ciphertext = self._cipher.encrypt(self.prefix + counter, body, None)
+            ciphertext = self._send_cipher.encrypt(self.prefix + counter, body, None)
         return struct.pack(">I", COUNTER_SIZE + len(ciphertext)) + counter + ciphertext
 
     def open(self, body: bytes) -> dict:
-        if self.peer_prefix is None:
+        if self._recv_cipher is None:
             raise ProtocolError("frame received before the peer's preamble")
         if len(body) <= COUNTER_SIZE:
             raise ProtocolError("frame too short")
@@ -192,7 +212,7 @@ class SecureSession:
         if counter != self._recv_counter + 1:
             raise ProtocolError("frame counter did not advance; replay rejected")
         try:
-            plain = self._cipher.decrypt(self.peer_prefix + body[:COUNTER_SIZE], body[COUNTER_SIZE:], None)
+            plain = self._recv_cipher.decrypt(self.peer_prefix + body[:COUNTER_SIZE], body[COUNTER_SIZE:], None)
         except InvalidTag:
             raise AuthenticationError() from None
         self._recv_counter = counter
