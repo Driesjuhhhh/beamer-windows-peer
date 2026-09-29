@@ -76,8 +76,9 @@ In your own appearance: light if your GitHub is light, dark if it is dark.
 - **Your shortcuts still work.** Cmd becomes Ctrl and Option becomes Alt on Windows, so Cmd+C
   copies there too. The PC gets the reverse: its Ctrl+C arrives on the Mac as Cmd+C. Either
   machine can switch to Positional instead, where each key arrives as the key in its place.
-- **Media keys follow you.** Play, pause, skip, mute and volume act on whichever machine you are
-  driving. Brightness stays with the Mac.
+- **Media keys follow you to the PC.** While the Mac drives the PC, play, pause, skip, mute and
+  volume act on the PC. Brightness stays with the Mac. The PC's own media keys do not reach the Mac
+  yet.
 - **Keys and buttons that stay put.** Each machine keeps a list of keys and mouse buttons that keep
   working where they were pressed while its input is on the other one: a mouse's back button for
   this machine's browser, a volume key for its speakers. Add one by pressing it. The back and
@@ -239,7 +240,7 @@ the Mac its media keys. A listed press stays on the machine it was pressed on wh
 its release goes wherever its press went, so nothing is ever left held down on the far side. The
 trigger key cannot be added.
 
-The F7–F12 media row and the volume keys forward as play/pause, next, previous, mute and volume.
+The Mac's F7–F12 media row and volume keys forward to the PC as play/pause, next, previous, mute and volume.
 On the Mac they arrive as system events rather than key events and are captured separately
 (`mac_app/media_keys.py`). Brightness and keyboard-backlight keys stay with macOS, since Windows has
 no equivalent.
