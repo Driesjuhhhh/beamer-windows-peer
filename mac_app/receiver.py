@@ -118,9 +118,9 @@ def handle_message(message: dict, injector=None, scale: Optional[InputScale] = N
     if not isinstance(data, dict):
         raise protocol.ProtocolError("message data must be a JSON object")
     if message_type == protocol.MSG_KEYDOWN:
-        injector.inject_key(data["key"], down=True)
+        injector.inject_key(data["key"], down=True, us=data.get("us"))
     elif message_type == protocol.MSG_KEYUP:
-        injector.inject_key(data["key"], down=False)
+        injector.inject_key(data["key"], down=False, us=data.get("us"))
     elif message_type == protocol.MSG_MOUSEMOVE:
         dx, dy = int(data["dx"]), int(data["dy"])
         if scale is not None and (dx or dy):

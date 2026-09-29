@@ -46,7 +46,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from input_injector import INJECTED_MARK
+from input_injector import INJECTED_MARK, SCAN_TO_US
 
 LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ WM_XBUTTONDOWN = 0x020B
 WM_XBUTTONUP = 0x020C
 WM_MOUSEHWHEEL = 0x020E
 
+LLKHF_EXTENDED = 0x01
 LLKHF_INJECTED = 0x10
 LLMHF_INJECTED = 0x01
 
@@ -368,7 +369,7 @@ class Hooks:
     """The two low-level hooks, the raw-input sink, and the thread that owns
     all three.
 
-    `on_key(name, down, vk)` and `on_mouse(message, x, y, mouse_data)` are called
+    `on_key(name, down, vk, us)` and `on_mouse(message, x, y, mouse_data)` are called
     on the hook thread and return True when the event has been consumed and
     must not reach the rest of Windows. `on_motion(dx, dy)` is called with
     the mouse's own relative counts and consumes nothing -- raw input is a
@@ -500,7 +501,8 @@ class Hooks:
             name = key_name(data.vkCode, data.scanCode, self._state, _to_unicode)
             if name is None:
                 return user32.CallNextHookEx(None, code, wparam, lparam)
-            if self._on_key(name, down, data.vkCode):
+            us = None if data.flags & LLKHF_EXTENDED else SCAN_TO_US.get(data.scanCode)
+            if self._on_key(name, down, data.vkCode, us):
                 return 1
         except Exception:
             # Never let an exception here swallow a key: fail open, log once

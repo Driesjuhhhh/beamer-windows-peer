@@ -22,7 +22,7 @@ class FakeInjector:
     def __init__(self):
         self.calls: List[Tuple[str, tuple]] = []
 
-    def inject_key(self, key, down):
+    def inject_key(self, key, down, us=None):
         self.calls.append(("key", (key, down)))
 
     def inject_mouse_move(self, dx, dy):

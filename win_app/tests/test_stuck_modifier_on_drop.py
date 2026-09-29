@@ -9,7 +9,7 @@ class FakeInjector:
     def __init__(self):
         self.calls = []
 
-    def inject_key(self, name, down):
+    def inject_key(self, name, down, us=None):
         self.calls.append((name, down))
 
     def release_all(self):

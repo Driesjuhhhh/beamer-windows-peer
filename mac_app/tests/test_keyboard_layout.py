@@ -16,6 +16,7 @@ from tests.test_bridge import FakeQuartz
 
 GERMAN = {0x00: "a", 0x06: "y", 0x07: "x", 0x08: "c", 0x09: "v", 0x0C: "q", 0x10: "z", 0x18: None, 0x21: "ü", 0x29: "ö", 0x32: "<"}
 FRENCH = {0x00: "q", 0x06: "w", 0x0C: "a", 0x0D: "z", 0x10: "y", 0x12: "&", 0x29: "m"}
+RUSSIAN = {0x00: "ф", 0x06: "я", 0x08: "с", 0x09: "м", 0x0C: "й", 0x10: "н", 0x12: "1", 0x13: "2", 0x21: "х", 0x2F: "ю"}
 
 
 class LayoutTest(unittest.TestCase):
@@ -61,11 +62,11 @@ class ShortcutToWindowsTests(LayoutTest):
 
     def test_german_cmd_z_is_undo_not_redo(self):
         keyboard_layout.install(GERMAN)
-        self.assertEqual(self.press(0x10, "z"), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "z"}}])
+        self.assertEqual(self.press(0x10, "z"), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "z", "us": "y"}}])
 
     def test_french_cmd_a_selects_all(self):
         keyboard_layout.install(FRENCH)
-        self.assertEqual(self.press(0x0C, "a"), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "a"}}])
+        self.assertEqual(self.press(0x0C, "a"), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "a", "us": "q"}}])
 
     def test_a_repeat_after_a_layout_switch_sends_the_first_press_character(self):
         translator = QuartzEventTranslator(FakeQuartz)
@@ -75,14 +76,14 @@ class ShortcutToWindowsTests(LayoutTest):
             event = {FakeQuartz.kCGKeyboardEventKeycode: 0x06, FakeQuartz.kCGKeyboardEventAutorepeat: repeat, "unicode": keyboard_layout.char_for(0x06)}
             return translator.key_result(event_type, event, 0x3D, key_map).messages
 
-        self.assertEqual(key(FakeQuartz.kCGEventKeyDown, 0), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "z"}}])
+        self.assertEqual(key(FakeQuartz.kCGEventKeyDown, 0), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "z", "us": "z"}}])
         keyboard_layout.install(GERMAN)
-        self.assertEqual(key(FakeQuartz.kCGEventKeyDown, 1), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "z"}}])
-        self.assertEqual(key(FakeQuartz.kCGEventKeyUp, 0), [{"type": protocol.MSG_KEYUP, "data": {"key": "z"}}])
+        self.assertEqual(key(FakeQuartz.kCGEventKeyDown, 1), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "z", "us": "z"}}])
+        self.assertEqual(key(FakeQuartz.kCGEventKeyUp, 0), [{"type": protocol.MSG_KEYUP, "data": {"key": "z", "us": "z"}}])
 
     def test_option_still_sends_the_key_not_the_composed_character(self):
         keyboard_layout.install(GERMAN)
-        self.assertEqual(self.press(0x06, "¥", modifier=0x3A), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "y"}}])
+        self.assertEqual(self.press(0x06, "¥", modifier=0x3A), [{"type": protocol.MSG_KEYDOWN, "data": {"key": "y", "us": "z"}}])
 
 
 class TypingOntoThisMacTests(LayoutTest):
@@ -115,6 +116,71 @@ class TypingOntoThisMacTests(LayoutTest):
     def test_a_character_the_layout_cannot_place_is_typed_as_text(self):
         keyboard_layout.install(GERMAN)
         self.assertEqual(self.plan("["), (0, "["))
+
+
+class TwoScriptTests(LayoutTest):
+    """GitHub issue 3: a PC switched to Russian sends the C key as "с", which this Mac on English
+    cannot place, so it was typed as text with Ctrl cleared, and Ctrl+C typed "с". Keys now carry
+    where they sit on a US keyboard, and a key lands there when a shortcut needs it or its letter
+    is from a script this layout does not type there."""
+
+    def plan(self, name, mods=None, us=None, down=True, held=None):
+        return injector.plan_key_event(name, down, set() if mods is None else mods, held, us=us)
+
+    def test_ctrl_c_from_a_pc_on_russian_is_cmd_c_on_an_english_mac(self):
+        self.assertEqual(self.plan("с", {"cmd"}, us="c"), (0x08, None))
+
+    def test_a_russian_letter_from_the_pc_types_this_macs_letter(self):
+        self.assertEqual(self.plan("с", us="c"), (0x08, None))
+        self.assertEqual(self.plan("С", {"shift"}, us="c"), (0x08, None))
+
+    def test_a_capital_without_shift_is_this_macs_capital(self):
+        self.assertEqual(self.plan("С", us="c"), (0, "C"))
+
+    def test_a_capital_without_shift_lets_go_of_the_character_it_typed(self):
+        self.assertEqual(self.plan("С", us="c", down=False, held={}), (0, "C"))
+
+    def test_a_repeat_after_a_layout_switch_stays_on_the_key_that_is_down(self):
+        held = {}
+        self.assertEqual(self.plan("z", us="z", held=held), (0x06, None))
+        keyboard_layout.install(GERMAN)
+        self.assertEqual(self.plan("z", us="z", held=held), (0x06, None))
+        self.assertEqual(self.plan("z", us="z", down=False, held=held), (0x06, None))
+        self.assertEqual(held, {})
+
+    def test_a_pc_on_english_types_russian_on_a_mac_on_russian(self):
+        keyboard_layout.install(RUSSIAN)
+        self.assertEqual(self.plan("c", us="c"), (0x08, None))
+        self.assertEqual(self.plan("c", {"cmd"}, us="c"), (0x08, None))
+
+    def test_matching_layouts_still_place_by_character(self):
+        keyboard_layout.install(RUSSIAN)
+        self.assertEqual(self.plan("с", us="c"), (0x08, None))
+
+    def test_an_accent_from_the_same_script_is_still_typed_as_text(self):
+        # French é sits on the US 2 key; a US Mac has no é, and 2 is not what was meant.
+        self.assertEqual(self.plan("é", us="2"), (0, "é"))
+
+    def test_a_shortcut_on_an_accented_key_lands_on_its_place(self):
+        self.assertEqual(self.plan("é", {"cmd"}, us="2"), (0x13, None))
+
+    def test_a_key_with_no_place_keeps_the_old_answer(self):
+        # A phone's keyboard, or a PC on an older Beamer, sends no place.
+        self.assertEqual(self.plan("с", {"cmd"}), (0, "с"))
+
+    def test_the_release_lets_go_of_the_key_the_press_went_down_on(self):
+        held = {}
+        self.assertEqual(self.plan("с", us="c", held=held), (0x08, None))
+        keyboard_layout.install(RUSSIAN)
+        self.assertEqual(self.plan("с", us="c", down=False, held=held), (0x08, None))
+        self.assertEqual(held, {})
+
+    def test_the_mac_sends_where_its_key_sits(self):
+        keyboard_layout.install(RUSSIAN)
+        translator = QuartzEventTranslator(FakeQuartz)
+        event = {FakeQuartz.kCGKeyboardEventKeycode: 0x08, FakeQuartz.kCGKeyboardEventAutorepeat: 0, "unicode": "с"}
+        messages = translator.key_result(FakeQuartz.kCGEventKeyDown, event, 0x3D, dict(config.DEFAULT_KEY_MAP)).messages
+        self.assertEqual(messages, [{"type": protocol.MSG_KEYDOWN, "data": {"key": "с", "us": "c"}}])
 
 
 @unittest.skipUnless(sys.platform == "darwin", "reads macOS's own layouts")
@@ -154,6 +220,12 @@ class SystemLayoutTests(unittest.TestCase):
         chars = self.chars("com.apple.keylayout.French")
         for code, char in FRENCH.items():
             self.assertEqual(chars.get(code), char, hex(code))
+
+    def test_russian(self):
+        for source_id in ("com.apple.keylayout.Russian", "com.apple.keylayout.RussianWin"):
+            chars = self.chars(source_id)
+            for code, char in RUSSIAN.items():
+                self.assertEqual(chars.get(code), char, f"{source_id} {code:#x}")
 
     def test_dead_keys_are_marked(self):
         # German's 0x18 is ´, which starts an accent rather than typing.

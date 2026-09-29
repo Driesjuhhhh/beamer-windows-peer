@@ -26,6 +26,7 @@ import protocol
 from key_codes import (
     KEY_NAME_TO_CODE,
     MODIFIER_KEY_CODES,
+    PRINTABLE_KEY_FALLBACKS,
     SPECIAL_KEY_NAMES,
 )
 
@@ -226,9 +227,11 @@ class QuartzEventTranslator:
         if character is None:
             return KeyResult(False, is_down, is_repeat, [])
         message_type = protocol.MSG_KEYDOWN if is_down else protocol.MSG_KEYUP
-        return KeyResult(False, is_down, is_repeat, [
-            {"type": message_type, "data": {"key": character}}
-        ])
+        data = {"key": character}
+        # Where the key sits on a US keyboard, for a PC whose layout cannot type the character.
+        if keycode in PRINTABLE_KEY_FALLBACKS:
+            data["us"] = PRINTABLE_KEY_FALLBACKS[keycode]
+        return KeyResult(False, is_down, is_repeat, [{"type": message_type, "data": data}])
 
     def mouse_messages(self, event_type, event):
         quartz = self.quartz

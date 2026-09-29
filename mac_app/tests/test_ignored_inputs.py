@@ -56,7 +56,7 @@ class TapTests(unittest.TestCase):
 
     def test_any_other_key_still_goes_to_windows(self):
         self.assertIsNone(self.tap(FakeQuartz.kCGEventKeyDown, key_event(KEY_A, "a")))
-        self.assertEqual(self.sent(), [(protocol.MSG_KEYDOWN, {"key": "a"})])
+        self.assertEqual(self.sent(), [(protocol.MSG_KEYDOWN, {"key": "a", "us": "a"})])
 
     def test_a_key_ignored_while_held_on_windows_is_still_released_there(self):
         self.configure([])

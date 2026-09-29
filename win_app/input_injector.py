@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 
@@ -21,6 +22,12 @@ if _IS_WINDOWS:
     user32.VkKeyScanW.argtypes = [ctypes.c_wchar]
     user32.MapVirtualKeyW.restype = ctypes.c_uint
     user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
+    user32.GetKeyboardLayout.restype = ctypes.c_void_p
+    user32.GetKeyboardLayout.argtypes = [ctypes.c_ulong]
+    user32.ToUnicodeEx.restype = ctypes.c_int
+    user32.ToUnicodeEx.argtypes = [
+        ctypes.c_uint, ctypes.c_uint, ctypes.c_char * 256, ctypes.c_wchar_p, ctypes.c_int, ctypes.c_uint, ctypes.c_void_p,
+    ]
     user32.GetForegroundWindow.restype = ctypes.c_void_p
     user32.GetClassNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
 
@@ -33,6 +40,16 @@ INPUT_KEYBOARD = 1
 # hDevice NULL, and this value coming back in RAWMOUSE.ulExtraInformation is
 # the only thing that tells the two apart.
 INJECTED_MARK = 0xBEA3
+
+# What each key types on a US keyboard, by scan code, which names the key's place rather than its
+# label. Key messages carry it as `us` both ways, and a character this layout cannot type lands on
+# its place when it has to (_by_place).
+SCAN_TO_US: Dict[int, str] = dict(zip(range(0x02, 0x0E), "1234567890-="))
+SCAN_TO_US.update(zip(range(0x10, 0x1C), "qwertyuiop[]"))
+SCAN_TO_US.update(zip(range(0x1E, 0x2A), "asdfghjkl;'`"))
+SCAN_TO_US.update(zip(range(0x2B, 0x36), "\\zxcvbnm,./"))
+US_SCAN_CODES = {char: scan for scan, char in SCAN_TO_US.items()}
+MAPVK_VSC_TO_VK = 1
 
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
@@ -112,6 +129,25 @@ def _map_virtual_key(vk: int) -> int:
     if user32 is None:
         raise RuntimeError("MapVirtualKeyW is only available on Windows")
     return user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+
+
+def _key_at(us: str) -> Optional[Tuple[int, Optional[str]]]:
+    """The virtual key at `us`'s place on this layout and the character it types there
+    unshifted (None for a dead key or none), or None for a place with no scan code."""
+    if user32 is None:
+        raise RuntimeError("MapVirtualKeyW is only available on Windows")
+    scan = US_SCAN_CODES.get(us)
+    if scan is None:
+        return None
+    vk = user32.MapVirtualKeyW(scan, MAPVK_VSC_TO_VK)
+    if not vk:
+        return None
+    # Not MapVirtualKeyW's MAPVK_VK_TO_CHAR, which answers A to Z for the letter keys on every
+    # layout: on Russian the C key would read as "c" and a letter from an English Mac stay text.
+    # Flag 1<<2 leaves the keyboard state alone, so a dead key here eats no accent being typed.
+    buffer = ctypes.create_unicode_buffer(8)
+    count = user32.ToUnicodeEx(vk, scan, (ctypes.c_char * 256)(), buffer, len(buffer), 1 << 2, user32.GetKeyboardLayout(0))
+    return vk, buffer.value[:count] if count == 1 else None
 
 
 VK_MAP = {
@@ -201,8 +237,11 @@ MODIFIER_KEYS = {"ctrl", "ctrl_r", "alt", "alt_r", "cmd", "cmd_r", "shift", "shi
 # character from.
 SHIFT_KEYS = {"shift", "shift_r"}
 
+CHORD_KEYS = MODIFIER_KEYS - SHIFT_KEYS
+
 VkLookup = Callable[[str], int]
 ScanLookup = Callable[[int], int]
+PlaceLookup = Callable[[str], Optional[Tuple[int, Optional[str]]]]
 
 # Characters we've already logged an unsupported-combo warning for, so we
 # don't spam the log for every repeat keypress.
@@ -214,6 +253,30 @@ def _keybd_input(vk: int, scan: int, flags: int) -> INPUT:
     return INPUT(type=INPUT_KEYBOARD, union=_INPUTUNION(ki=key_input))
 
 
+def _script(character: str) -> str:
+    return unicodedata.name(character, "").split(" ")[0]
+
+
+def _by_place(ch: str, us: Optional[str], mods_down: Set[str], place_lookup: Optional[PlaceLookup]) -> Optional[Tuple[int, Optional[str]]]:
+    """The virtual key at `us`, the place the sender's key sits on a US keyboard, and what it
+    types here, for a character this layout cannot type: under a chord, which has to reach the
+    app as a shortcut, and for a letter of another script than the one this layout types there,
+    so a Mac on Russian types this PC's English and one on English its Russian, as the PC's own
+    keyboard would. Anything else, an é from a French Mac say, stays text: the key it sits on
+    types something unrelated here. The twin of input_injector_mac._by_place."""
+    if us is None or place_lookup is None:
+        return None
+    place = place_lookup(us)
+    if place is None:
+        return None
+    here = place[1]
+    if mods_down & CHORD_KEYS:
+        return place
+    if ch.isalpha() and here and here.isalpha() and _script(ch) != _script(here):
+        return place
+    return None
+
+
 def plan_key_inputs(
     name: str,
     down: bool,
@@ -221,12 +284,16 @@ def plan_key_inputs(
     char_vk_down: Dict[str, int],
     vk_lookup: VkLookup,
     scan_lookup: ScanLookup,
+    us: Optional[str] = None,
+    place_lookup: Optional[PlaceLookup] = None,
 ) -> List[Tuple[int, int, int]]:
     """Pure planning logic: decide which (wVk, wScan, flags) tuples to send.
 
     Mutates mods_down / char_vk_down to track state across calls, exactly
     like inject_key does, so callers (tests) can inspect the bookkeeping.
-    Returns an empty list if the key should be dropped.
+    Returns an empty list if the key should be dropped. `us` is where the
+    key sits on a US keyboard, sent by a physical keyboard and absent from
+    a phone's.
     """
     keyup_flag = 0 if down else KEYEVENTF_KEYUP
     lowered = name.lower()
@@ -257,15 +324,25 @@ def plan_key_inputs(
     # fallback for whatever the VK path can't safely cover.
     if len(name) == 1:
         ch = name
-        if not down:
-            if ch in char_vk_down:
-                vk = char_vk_down.pop(ch)
-                scan = scan_lookup(vk)
-                return [(vk, scan, KEYEVENTF_KEYUP)]
-            return [(0, ord(ch), KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)]
+        if ch in char_vk_down:
+            # A repeat stays on the key the press went down on, even if the layout changed since,
+            # so its release lets go of the key that is actually down.
+            vk = char_vk_down[ch] if down else char_vk_down.pop(ch)
+            return [(vk, scan_lookup(vk), keyup_flag)]
 
-        result = vk_lookup(ch)
+        result = vk_lookup(ch) if down else -1
+        place = _by_place(ch, us, mods_down, place_lookup) if result == -1 else None
+        if place is not None and ch.isupper() and not mods_down & (SHIFT_KEYS | CHORD_KEYS):
+            # A capital from caps lock: the key would type this layout's small letter. The
+            # release is worked out the same way, so it lets go of the same character.
+            return [(0, ord(place[1].upper()), KEYEVENTF_UNICODE | keyup_flag)]
+        if not down:
+            return [(0, ord(ch), KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)]
         if result == -1:
+            if place is not None:
+                vk = place[0]
+                char_vk_down[ch] = vk
+                return [(vk, scan_lookup(vk), keyup_flag)]
             if ch not in _warned_chars:
                 LOGGER.warning("Unsupported character for this keyboard layout: %r", ch)
                 _warned_chars.add(ch)
@@ -314,9 +391,9 @@ def _locked(function):
 
 
 @_locked
-def inject_key(name: str, down: bool) -> None:
+def inject_key(name: str, down: bool, us: Optional[str] = None) -> None:
     LOGGER.debug("key %s %s (mods held: %s)", name, "down" if down else "up", sorted(_mods_down))
-    plan = plan_key_inputs(name, down, _mods_down, _char_vk_down, _vk_key_scan, _map_virtual_key)
+    plan = plan_key_inputs(name, down, _mods_down, _char_vk_down, _vk_key_scan, _map_virtual_key, us, _key_at)
     if not plan:
         return
     _send_input(*(_keybd_input(vk, scan, flags) for vk, scan, flags in plan))

@@ -229,7 +229,10 @@ on its own opens Start. The PC's keys arrive on the Mac the reverse way. Chords 
 Windows held are sent as real virtual-key presses, so they land on the right key for the active
 Windows keyboard layout. The Mac reads its own layout too, so on a German or French Mac Cmd+Z is
 still undo and Cmd+A still selects all, and a letter typed from the PC lands on the key that types
-it. The `key_map` object in each app's config JSON can still override single keys.
+it. When the two machines are on layouts of different alphabets, say the PC on Russian and the Mac
+on English, a letter types what the receiving machine's own layout has on that key, as its own
+keyboard would, and shortcuts keep working. The `key_map` object in each app's config JSON can
+still override single keys.
 
 The trigger key is never forwarded. On both machines it is recorded by pressing it: Right Option on
 the Mac and Right Ctrl on the PC to start with. Either can double-tap or hold.

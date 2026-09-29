@@ -2060,7 +2060,7 @@ class WindowsApplication(QWidget):
             return
         self.sender.start(config)
 
-    def _on_hook_key(self, name: str, down: bool, vk: Optional[int] = None) -> bool:
+    def _on_hook_key(self, name: str, down: bool, vk: Optional[int] = None, us: Optional[str] = None) -> bool:
         """Every key, on the hook thread. The trigger is swallowed as it
         switches; everything else goes to the Mac only while the Mac has
         input, and a key on the ignored list not even then."""
@@ -2077,7 +2077,7 @@ class WindowsApplication(QWidget):
             return True
         if self._trigger.claims(name, down, self.sender.redirecting):
             return True
-        return self.sender.on_key(name, down, vk)
+        return self.sender.on_key(name, down, vk, us)
 
     def _on_focus(self, target: str) -> None:
         """The Mac took input on this PC, or gave it back. Either way the

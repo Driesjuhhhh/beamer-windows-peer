@@ -339,7 +339,7 @@ class TranslatorTests(unittest.TestCase):
             FakeQuartz.kCGEventKeyDown, event, 0x3D, self.key_map
         )
         self.assertEqual(result.messages, [
-            {"type": protocol.MSG_KEYDOWN, "data": {"key": "v"}}
+            {"type": protocol.MSG_KEYDOWN, "data": {"key": "v", "us": "v"}}
         ])
 
     def test_shift_still_composes_its_character(self):
@@ -353,7 +353,7 @@ class TranslatorTests(unittest.TestCase):
             FakeQuartz.kCGEventKeyDown, event, 0x3D, self.key_map
         )
         self.assertEqual(result.messages, [
-            {"type": protocol.MSG_KEYDOWN, "data": {"key": "V"}}
+            {"type": protocol.MSG_KEYDOWN, "data": {"key": "V", "us": "v"}}
         ])
 
     def test_printable_key_uses_unicode(self):
@@ -369,7 +369,7 @@ class TranslatorTests(unittest.TestCase):
             self.key_map,
         )
         self.assertEqual(result.messages, [
-            {"type": protocol.MSG_KEYDOWN, "data": {"key": "å"}}
+            {"type": protocol.MSG_KEYDOWN, "data": {"key": "å", "us": "a"}}
         ])
 
     def test_printable_keyup_reuses_keydown_character(self):
@@ -386,7 +386,7 @@ class TranslatorTests(unittest.TestCase):
         self.translator.key_result(FakeQuartz.kCGEventKeyDown, down, 0x3D, self.key_map)
         result = self.translator.key_result(FakeQuartz.kCGEventKeyUp, up, 0x3D, self.key_map)
         self.assertEqual(result.messages, [
-            {"type": protocol.MSG_KEYUP, "data": {"key": "A"}}
+            {"type": protocol.MSG_KEYUP, "data": {"key": "A", "us": "a"}}
         ])
 
     def test_command_modifier_uses_configured_mapping(self):
@@ -586,7 +586,7 @@ class ControllerTests(unittest.TestCase):
         self.assertIsNone(returned)
         self.assertEqual(
             self.controller.outbound.get_nowait(),
-            {"type": protocol.MSG_KEYDOWN, "data": {"key": "a"}},
+            {"type": protocol.MSG_KEYDOWN, "data": {"key": "a", "us": "a"}},
         )
 
     def test_queue_failure_restores_local_before_returning_event(self):
@@ -1617,7 +1617,7 @@ class GestureWiringTests(unittest.TestCase):
         self.assertIsNone(keyboard_returned)
         self.assertEqual(
             controller.outbound.get_nowait(),
-            {"type": protocol.MSG_KEYDOWN, "data": {"key": "a"}},
+            {"type": protocol.MSG_KEYDOWN, "data": {"key": "a", "us": "a"}},
         )
 
     def test_swipe_while_redirecting_is_translated_and_swallowed(self):

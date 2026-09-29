@@ -21,10 +21,11 @@ import functools
 import logging
 import threading
 import time
+import unicodedata
 from typing import Dict, List, Optional, Set, Tuple
 
 import keyboard_layout
-from key_codes import KEY_NAME_TO_CODE
+from key_codes import KEY_NAME_TO_CODE, US_KEY_CODES
 
 try:
     import Quartz
@@ -100,12 +101,34 @@ def current_flags(mods_down: Set[str]) -> int:
     return flags
 
 
-def plan_key_event(name: str, down: bool, mods_down: Set[str], held: Optional[Dict[str, int]] = None) -> Optional[Tuple[int, Optional[str]]]:
+def _script(character: str) -> str:
+    return unicodedata.name(character, "").split(" ")[0]
+
+
+def _by_place(name: str, us: Optional[str], mods_down: Set[str]) -> Optional[int]:
+    """The key at `us`, the place the sender's key sits on a US keyboard, for a character this
+    layout cannot place: under a chord, which has to reach the app as a shortcut, and for a letter
+    of another script than the one this layout types there, so a PC on Russian types this Mac's
+    English and one on English types its Russian, as the Mac's own keyboard would. Anything else,
+    an é from a French PC say, stays text: the key it sits on types something unrelated here."""
+    code = US_KEY_CODES.get(us)
+    if code is None:
+        return None
+    if mods_down & CHORD_MODIFIERS:
+        return code
+    here = keyboard_layout.char_for(code)
+    if name.isalpha() and here and here.isalpha() and _script(name) != _script(here):
+        return code
+    return None
+
+
+def plan_key_event(name: str, down: bool, mods_down: Set[str], held: Optional[Dict[str, int]] = None, us: Optional[str] = None) -> Optional[Tuple[int, Optional[str]]]:
     """Pure planning: (key code, unicode string or None) for one key, or None
     when there is nothing to send. Mutates `mods_down` exactly as inject_key
     does, so a test can inspect the bookkeeping. `held` keeps the key each
     character went down on, so its release lets go of that key even if the
-    layout changed in between."""
+    layout changed in between. `us` is where the key sits on a US keyboard,
+    sent by a physical keyboard and absent from a phone's."""
     lowered = name.lower()
     if lowered in MODIFIER_FLAG_NAMES:
         # Recorded before the event is built, so the modifier's own event
@@ -127,9 +150,16 @@ def plan_key_event(name: str, down: bool, mods_down: Set[str], held: Optional[Di
     # key, and a plain "z" from the PC is not posted as the US Z key, which types "y" on a
     # German Mac. keyboard_layout is also what bridge.py reads keys with, so the two directions
     # agree about which key is which.
-    if held is not None and not down and name in held:
-        return held.pop(name), None
+    if held is not None and name in held:
+        # A repeat stays on the key the press went down on, even if the layout changed since, so
+        # its release lets go of the key that is actually down.
+        return (held[name] if down else held.pop(name)), None
     key_code = keyboard_layout.code_for(name.lower())
+    if key_code is None:
+        key_code = _by_place(name, us, mods_down)
+        if key_code is not None and name.isupper() and not mods_down:
+            # A capital from caps lock: posting the key would type this layout's small letter.
+            return 0, keyboard_layout.char_for(key_code).upper()
     if key_code is not None and (name.islower() or not name.isalpha() or mods_down):
         if held is not None and down:
             held[name] = key_code
@@ -141,9 +171,9 @@ def plan_key_event(name: str, down: bool, mods_down: Set[str], held: Optional[Di
 
 
 @_locked
-def inject_key(name: str, down: bool) -> None:
+def inject_key(name: str, down: bool, us: Optional[str] = None) -> None:
     quartz = _require()
-    plan = plan_key_event(name, down, _mods_down, _held_codes)
+    plan = plan_key_event(name, down, _mods_down, _held_codes, us)
     if plan is None:
         return
     key_code, text = plan

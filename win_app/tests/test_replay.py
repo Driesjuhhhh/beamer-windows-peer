@@ -50,10 +50,23 @@ class Recording:
 def replay(port, data):
     """Send `data` as a fresh connection and return every byte the responder sent back before it
     closed."""
+    data = bytes(data)
     with socket.create_connection(("127.0.0.1", port), timeout=3.0) as attacker:
-        attacker.sendall(bytes(data))
-        attacker.shutdown(socket.SHUT_WR)
         reply = bytearray()
+        # The responder's preamble is read before the frames go: on Windows a socket closed with
+        # bytes still unread resets the connection, and the reset throws away whatever this end
+        # had not read yet, so sending everything at once lost the preamble about a run in five.
+        attacker.sendall(data[:protocol.PREAMBLE_SIZE])
+        while len(reply) < protocol.PREAMBLE_SIZE:
+            chunk = attacker.recv(protocol.PREAMBLE_SIZE - len(reply))
+            if not chunk:
+                return bytes(reply)
+            reply += chunk
+        try:
+            attacker.sendall(data[protocol.PREAMBLE_SIZE:])
+            attacker.shutdown(socket.SHUT_WR)
+        except (ConnectionResetError, ConnectionAbortedError):
+            return bytes(reply)
         while True:
             try:
                 chunk = attacker.recv(65536)

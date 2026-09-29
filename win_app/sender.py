@@ -349,7 +349,7 @@ class MacSender:
         last = max(self._last_ack_at, self._connected_at)
         return (self._clock() - last) <= ACK_TIMEOUT_SECONDS
 
-    def on_key(self, name: str, down: bool, vk: Optional[int] = None) -> bool:
+    def on_key(self, name: str, down: bool, vk: Optional[int] = None, us: Optional[str] = None) -> bool:
         # Held keys are known by their virtual key where there is one: the name is the character
         # with Shift applied, so Shift let go before A made A's release arrive as "a" and miss.
         held = vk if vk is not None else name
@@ -371,15 +371,23 @@ class MacSender:
         if down:
             # The name it went down under is kept, so its release matches even if Shift or the
             # modifier style changes while it is held.
-            wire = self._keys_down.get(held) or self._wire_name(name)
-            self._keys_down[held] = wire
-            self._enqueue({"type": protocol.MSG_KEYDOWN, "data": {"key": wire}})
+            data = self._keys_down.get(held) or self._key_data(name, us)
+            self._keys_down[held] = data
+            self._enqueue({"type": protocol.MSG_KEYDOWN, "data": data})
         else:
-            wire = self._keys_down.pop(held, None) or self._wire_name(name)
+            data = self._keys_down.pop(held, None) or self._key_data(name, us)
             # Marked, so a release still queued when input comes home is sent
             # rather than dropped by the gate: the Mac has the key-down.
-            self._enqueue({"type": protocol.MSG_KEYUP, "data": {"key": wire}, _RELEASE_MARK: True})
+            self._enqueue({"type": protocol.MSG_KEYUP, "data": data, _RELEASE_MARK: True})
         return True
+
+    def _key_data(self, name: str, us: Optional[str]) -> dict:
+        """A key message's data. `us` is the key's place on a US keyboard, which the Mac types on
+        when its layout cannot type the character: a PC on Russian sends C as "с"."""
+        data = {"key": self._wire_name(name)}
+        if us is not None:
+            data["us"] = us
+        return data
 
     def _wire_name(self, name: str) -> str:
         """The capture names Ctrl "cmd" and the Windows key "ctrl", the Semantic style;
@@ -575,8 +583,8 @@ class MacSender:
             # The entries stay, so the physical releases here are swallowed.
             self.redirecting = False
             self._ignore_gate.reset()
-            for wire in list(self._keys_down.values()):
-                self._enqueue_control({"type": protocol.MSG_KEYUP, "data": {"key": wire}, _RELEASE_MARK: True})
+            for data in list(self._keys_down.values()):
+                self._enqueue_control({"type": protocol.MSG_KEYUP, "data": data, _RELEASE_MARK: True})
             self._pin_point = None
             self._last_point = None
             # A fresh model, not a reset one: the old one disarmed itself at
