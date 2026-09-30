@@ -104,6 +104,16 @@ class TwoWindowsTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: not self.senders[0].redirecting))
         self.assertTrue(wait_for(lambda: not self.senders[1]._receiving))
 
+    def test_display_control_and_targeted_arrival_use_the_authenticated_link(self):
+        received = []
+        self.receivers[1].display_control = received.append
+        self.assertTrue(self.senders[0].send_display_control({'action':'identify','id':'display-b'}))
+        self.assertTrue(wait_for(lambda: bool(received)))
+        self.assertEqual(received[0], {'action':'identify','id':'display-b'})
+        self.desktops[1].displays = lambda: [dict(id='display-b',x=1920,y=0,width=1920,height=1080)]
+        self.senders[0].set_redirecting(True, arrival_edge='left', offset=.5, target_display='display-b')
+        self.assertTrue(wait_for(lambda: self.desktops[1].cursor_position()[0] >= 1920))
+
 
 class PairHelperTests(unittest.TestCase):
     def test_code_exchange_saves_matching_tokens_on_both_pcs(self):

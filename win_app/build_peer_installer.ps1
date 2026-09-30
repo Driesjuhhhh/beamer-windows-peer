@@ -40,7 +40,7 @@ $ddfPath = Join-Path $buildDir 'payload.ddf'
 Set-Content -LiteralPath $ddfPath -Value $ddf -Encoding ascii
 & "$env:SystemRoot\System32\makecab.exe" /F $ddfPath
 if ($LASTEXITCODE -ne 0) { throw 'Cabinet creation failed' }
-$msiPath = Join-Path $outputDir 'Beamer-Windows-Peer-UI-1.4.4.msi'
+$msiPath = Join-Path $outputDir 'Beamer-Windows-Peer-UI-1.4.5.msi'
 if (Test-Path -LiteralPath $msiPath) { throw 'UI installer already exists; preserve it before rebuilding' }
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $database = $installer.OpenDatabase($msiPath, 3)
@@ -76,17 +76,17 @@ Sql 'CREATE TABLE `Upgrade` (`UpgradeCode` CHAR(38) NOT NULL, `VersionMin` CHAR(
 foreach ($table in @('InstallExecuteSequence','InstallUISequence')) {
     Sql ('CREATE TABLE `' + $table + '` (`Action` CHAR(72) NOT NULL, `Condition` CHAR(255), `Sequence` SHORT NOT NULL PRIMARY KEY `Action`)')
 }
-$productCode = '{43716B59-E6F0-4DAA-8645-1695D11DE9EE}'
+$productCode = '{920A06D7-D53D-446F-BD14-D2FE5B3BB3BD}'
 $shortcutIndex = 0
 foreach ($entry in @(
     @('ProductCode',$productCode),@('ProductName','Beamer Windows Peer (experimental)'),
-    @('ProductVersion','1.4.4'),@('ProductLanguage','1033'),
+    @('ProductVersion','1.4.5'),@('ProductLanguage','1033'),
     @('Manufacturer','Beamer local development build'),
     @('UpgradeCode','{E97759E2-AB73-44CF-B1C1-852DE0B37BD7}'),
     @('INSTALLLEVEL','1'),@('ARPCOMMENTS','Experimental Windows-to-Windows build. Pairing helper and guide included.'),
     @('ARPNOMODIFY','1'),@('MSIFASTINSTALL','7'),@('SecureCustomProperties','OLDPRODUCTS')
 )) { Insert 'Property' @('Property','Value') $entry }
-Insert 'Upgrade' @('UpgradeCode','VersionMax','Attributes','Remove','ActionProperty') @('{E97759E2-AB73-44CF-B1C1-852DE0B37BD7}','1.4.4',0,'ALL','OLDPRODUCTS')
+Insert 'Upgrade' @('UpgradeCode','VersionMax','Attributes','Remove','ActionProperty') @('{E97759E2-AB73-44CF-B1C1-852DE0B37BD7}','1.4.5',0,'ALL','OLDPRODUCTS')
 foreach ($entry in @(
     @('TARGETDIR',$null,'SourceDir'),@('LocalAppDataFolder','TARGETDIR','.'),
     @('INSTALLDIR','LocalAppDataFolder','BEAMER~1|Beamer Windows Peer'),

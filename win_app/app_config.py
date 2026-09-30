@@ -122,6 +122,8 @@ class Config:
     appearance: str = "system"
     # Explicit opt-in: old configurations retain the Mac receiver and key mapping.
     peer_platform: str = "mac"
+    advanced_crossing: bool = False
+    screen_layout: list = field(default_factory=list)
 
 
 def migrated_port(value) -> int:
@@ -149,6 +151,13 @@ def default_config_path() -> Path:
 
 
 def validate_config(config: Config) -> None:
+    import display_layout
+    if not isinstance(config.advanced_crossing, bool):
+        raise ConfigError("advanced_crossing must be boolean")
+    try:
+        display_layout.validate_layout(config.screen_layout)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
     if config.peer_platform not in ("mac", "windows"):
         raise ConfigError("peer_platform must be mac or windows")
     if not isinstance(config.host, str):
@@ -281,6 +290,8 @@ def config_from_dict(raw: dict) -> Config:
             double_tap_ms=int(raw.get("double_tap_ms", 300)),
             modifier_style=raw.get("modifier_style", "semantic"),
             peer_platform=raw.get("peer_platform", "mac"),
+            advanced_crossing=raw.get("advanced_crossing", False),
+            screen_layout=raw.get("screen_layout", []),
             block_while_dragging=raw.get("block_while_dragging", True),
             mac_hardware_address=raw.get("mac_hardware_address", "") or "",
             mac_host=raw.get("mac_host", "") or "",
@@ -347,6 +358,8 @@ def config_to_dict(config: Config) -> dict:
         "double_tap_ms": int(config.double_tap_ms),
         "modifier_style": config.modifier_style,
         "peer_platform": config.peer_platform,
+        "advanced_crossing": config.advanced_crossing,
+        "screen_layout": config.screen_layout,
         "block_while_dragging": config.block_while_dragging,
         "mac_hardware_address": config.mac_hardware_address,
         "mac_host": config.mac_host,

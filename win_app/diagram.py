@@ -286,7 +286,7 @@ class PushStrip(QWidget):
             # Text drawn in the flipped frame would read backwards.
             painter.resetTransform()
             label = QRectF(self.width() - label.right(), label.top(), label.width(), label.height())
-        painter.drawText(label, Qt.AlignmentFlag.AlignCenter, "Your Mac")
+        painter.drawText(label, Qt.AlignmentFlag.AlignCenter, getattr(self, "peer_label", "Your Mac"))
         painter.end()
 
     def _pointer(self, painter, tip: QPointF) -> None:

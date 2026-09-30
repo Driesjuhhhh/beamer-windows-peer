@@ -541,6 +541,10 @@ class ReceiverServer:
                         LOGGER.warning("Receive failed for %s: %s", peer, exc)
                     break
                 message_type = message.get("type") if isinstance(message, dict) else None
+                if message_type == "windows_displays":
+                    if self._peer_name == "PC" and getattr(self, "display_control", None) is not None:
+                        self.display_control(message.get("data"))
+                    continue
                 if message_type == protocol.MSG_PING:
                     # Liveness only; never recorded or acked as an input event.
                     continue
@@ -737,7 +741,10 @@ class ReceiverServer:
                 desktop.set_cursor_position(*outcome.position)
             elif outcome.action == crossing.CROSS:
                 LOGGER.info("Pointer pushed through the %s edge; returning input to the %s", model.edge, self._peer_name)
-                self._send_message(connection, session, protocol.switch_msg(self._peer_target, outcome.edge, outcome.offset))
+                switched = protocol.switch_msg(self._peer_target, outcome.edge, outcome.offset)
+                if getattr(model, "target_display", None) is not None:
+                    switched["data"]["display_id"] = model.target_display
+                self._send_message(connection, session, switched)
         except Exception:
             # Logged once, not at 100Hz: the return edge is dropped until the
             # Mac's next switch re-arms it, and input keeps flowing normally.
@@ -928,7 +935,13 @@ class ReceiverServer:
             return
         try:
             desktop = self._desktop_module()
-            x, y = crossing.arrival_position(desktop.monitors(), edge, offset)
+            position = None
+            if self._peer_name == "PC" and isinstance(data.get("display_id"), str):
+                import display_layout
+                position = display_layout.arrival(desktop.displays(), data["display_id"], edge, offset)
+                if position is None:
+                    return
+            x, y = position or crossing.arrival_position(desktop.monitors(), edge, offset)
             desktop.set_cursor_position(x, y)
         except Exception:
             LOGGER.exception("Could not place the pointer at the %s edge on arrival", edge)

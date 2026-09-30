@@ -1,6 +1,6 @@
 BEAMER WINDOWS PEER - EXPERIMENTELE WINDOWS-NAAR-WINDOWS-VERSIE
 
-1. Installeer Beamer-Windows-Peer-UI-1.4.4.msi op beide Windows-pc's.
+1. Installeer Beamer-Windows-Peer-UI-1.4.5.msi op beide Windows-pc's.
    De app komt in %LOCALAPPDATA%\Beamer Windows Peer.
    In het Startmenu staat de map Beamer Windows Peer.
 
@@ -26,8 +26,8 @@ BELANGRIJK
   deelt die met de officiële app; draai die twee niet tegelijkertijd.
 - De bestaande 'Pair a Mac'-knop blijft voor Mac-koppeling. Voor twee
   Windows-pc's gebruik je 'Pair a Windows PC' rechtstreeks in Overview.
-- Deze MSI vervangt de vorige lokale 1.4.2-MSI. Het versienummer in de app is nu eveneens 1.4.4. De publieke versie van Beamer
-  is niet 1.4.4: dat nummer wordt hier alleen voor de lokale MSI-upgrade gebruikt.
+- Deze MSI vervangt de vorige lokale 1.4.2-MSI. Het versienummer in de app is nu eveneens 1.4.5. De publieke versie van Beamer
+  is niet 1.4.5: dat nummer wordt hier alleen voor de lokale MSI-upgrade gebruikt.
 - Sommige teksten en diagrammen zeggen nog Mac; daarmee wordt de andere
   pc bedoeld. Ctrl blijft Ctrl en de Windows-toets blijft de Windows-toets.
 - Schakel automatische upstream-updatechecks uit voor deze lokale build.
@@ -42,3 +42,6 @@ BELANGRIJK
 
 Broncode: de officiële GPL-3.0-repo https://github.com/kalkman-code/beamer,
 met de meegeleverde lokale wijzigingen. LICENSE is in de app-map opgenomen.
+
+ADVANCED CROSSING (1.4.5)
+Installeer deze versie op beide Windows-pc's. Ga naar Crossing > Ways in > Advanced mode. Identify toont vijf seconden nummers op de schermen. Sleep de schermen zodat hun randen raken en druk Apply layout. De indeling wordt ook naar de andere pc gestuurd. Alleen de twee gekoppelde pc's worden ondersteund; Windows-scherminstellingen worden niet gewijzigd.

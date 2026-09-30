@@ -1,8 +1,8 @@
 # Beamer Windows Peer fork
 
-Experimental Windows-to-Windows support with **Pair a Windows PC** in the app and a corrected Qt DLL package. This fork's `windows-peer` branch is based on upstream commit `e5339fa` (1.4.2); `VERSION` 1.4.4 is a local fork build number, not an upstream release.
+Experimental Windows-to-Windows support with **Pair a Windows PC** in the app and a corrected Qt DLL package. This fork's `windows-peer` branch is based on upstream commit `e5339fa` (1.4.2); `VERSION` 1.4.5 is a local fork build number, not an upstream release.
 
-See [Windows pairing](WINDOWS-TO-WINDOWS.md) and [build instructions and validation limits](FORK-BUILD.md). The upstream download links below provide the original Mac/Windows releases.
+Version 1.4.5 adds **Crossing → Advanced mode**: arrange all monitors of the two paired Windows PCs, identify screens and cross through touching edges. See [Advanced Crossing](ADVANCED-CROSSING.md), [Windows pairing](WINDOWS-TO-WINDOWS.md) and [build instructions and validation limits](FORK-BUILD.md). The upstream download links below provide the original Mac/Windows releases.
 
 ---
 <p align="center"><img src="Beamer.svg" width="96" height="96" alt=""></p>

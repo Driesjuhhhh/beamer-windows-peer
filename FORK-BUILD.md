@@ -1,8 +1,10 @@
 # Windows Peer fork build
 
-The `windows-peer` branch starts at upstream `e5339fa82d4ba5c662fda920f441b2e70d6c9199` (Beamer 1.4.2). Version 1.4.4 identifies this experimental fork build. Upstream `main` is retained separately; newer upstream changes have not been merged into this branch.
+The `windows-peer` branch starts at upstream `e5339fa82d4ba5c662fda920f441b2e70d6c9199` (Beamer 1.4.2). Version 1.4.5 identifies this experimental fork build. Upstream `main` is retained separately; newer upstream changes have not been merged into this branch.
 
 Added features: Windows peer configuration, Windows receiver focus roles, Windows modifier mapping, in-app **Pair a Windows PC**, command-line pairing, and Windows pairing tests. The default peer remains Mac. Mac sources and shared protocol implementations are unchanged.
+
+Version 1.4.5 adds [Advanced Crossing](ADVANCED-CROSSING.md): per-monitor identities, authenticated screen inventory/identify/layout controls, a drag-and-snap editor, saved layouts with reversed ownership on the peer and targeted arrivals through each touching screen pair. Windows `receiver.py` has opt-in extension handling; Mac sources and the shared wire-version definitions remain unchanged. Both Windows PCs need this version for the advanced editor.
 
 The package excludes third-party ICU DLLs accidentally collected from the build machine's PATH: those DLLs caused QtCore to fail with Windows error 127. Qt uses the Windows system ICU library.
 
@@ -24,7 +26,7 @@ try {
 .\build_peer_installer.ps1
 ```
 
-The builder expects `dist/Beamer.exe` and `dist/Pair-Beamer.exe` and creates `dist/Beamer-Windows-Peer-UI-1.4.4.msi`. It uses Windows `makecab` and Windows Installer COM. Preserve an existing MSI before rebuilding. Building does not install the application.
+The builder expects `dist/Beamer.exe` and `dist/Pair-Beamer.exe` and creates `dist/Beamer-Windows-Peer-UI-1.4.5.msi`. It uses Windows `makecab` and Windows Installer COM. Preserve an existing MSI before rebuilding. Building does not install the application.
 
 The MSI installs per user into `%LOCALAPPDATA%\Beamer Windows Peer`, with a separate product identity from official Beamer. Pairing preferences use the existing Beamer configuration directory. The MSI includes the app, pairing helper, optional left/right pairing shortcuts, installation guide and GPL license.
 

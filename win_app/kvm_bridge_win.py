@@ -63,6 +63,8 @@ import receiver
 from receiver import ReceiverServer, ServerState
 from peer_receiver import PeerReceiver
 from windows_pairing_ui import WindowsPairDialog
+from advanced_displays import AdvancedDisplays
+import display_layout
 import return_edge
 import sender
 from sender import MacSender
@@ -374,7 +376,11 @@ class WindowsApplication(QWidget):
         }
         self._page_indexes: dict = {}
         for key, name, purpose in pages_win.PAGES:
-            scroll, layout = self._page_shell(name, purpose, pages_win.SCOPE.get(key))
+            scope = pages_win.SCOPE.get(key)
+            if key == "crossing" and current.peer_platform == "windows":
+                purpose = "Choose how input crosses to the other PC. Use Advanced mode to arrange all screens."
+                scope = "Advanced layouts are shared with the other PC after Apply layout. Resistance and shortcuts remain this PC's settings."
+            scroll, layout = self._page_shell(name, purpose, scope)
             builders[key](layout, current)
             layout.addStretch(1)
             self._page_indexes[key] = self.stack.addWidget(scroll)
@@ -669,12 +675,34 @@ class WindowsApplication(QWidget):
     # -- Crossing -----------------------------------------------------------------------------
 
     def _crossing_page(self, layout, current: Config) -> None:
-        layout.addWidget(self._ways_module(current))
+        self.basic_ways = self._ways_module(current)
+        mode = widgets.Module("Ways in")
+        self.advanced_switch = widgets.Switch("Advanced mode")
+        self.advanced_switch.setChecked(current.advanced_crossing)
+        mode.body.addWidget(self.advanced_switch)
+        self.advanced_displays = AdvancedDisplays(self)
+        mode.body.addWidget(self.advanced_displays)
+        mode.body.addWidget(self.basic_ways)
+        self.advanced_displays.setVisible(current.advanced_crossing)
+        self.basic_ways.setVisible(not current.advanced_crossing)
+        self.advanced_switch.toggled.connect(self._set_advanced_mode)
+        layout.addWidget(mode)
         self.resistance_module = self._resistance_module(current)
         layout.addWidget(self.resistance_module)
         self.shortcut_module = self._shortcut_module(current)
         layout.addWidget(self.shortcut_module)
         self._reflect_ways()
+
+    def _set_advanced_mode(self, enabled):
+        if self._config is None:
+            return
+        self._config.advanced_crossing = bool(enabled)
+        self.advanced_displays.setVisible(enabled)
+        self.basic_ways.setVisible(not enabled)
+        self._persist()
+        self.sender.update_config(self._config)
+        self.server.rearm_return()
+        self.advanced_displays.send({"action": "mode", "enabled": bool(enabled)})
 
     @staticmethod
     def _row(*items) -> QWidget:
@@ -689,7 +717,7 @@ class WindowsApplication(QWidget):
         return row
 
     def _ways_module(self, current: Config) -> QWidget:
-        module = widgets.Module("Ways in")
+        module = widgets.Module("Crossing controls")
         self.ways_summary = widgets.label("", "note", wrap=True)
         module.body.addWidget(self.ways_summary)
         self.arrangement_diagram = ArrangementDiagram()
@@ -881,6 +909,7 @@ class WindowsApplication(QWidget):
     def _resistance_module(self, current: Config) -> QWidget:
         module = widgets.Module("Resistance")
         self.resistance_strip = PushStrip()
+        self.resistance_strip.peer_label = "Other PC" if current.peer_platform == "windows" else "Your Mac"
         self.resistance_strip.set_edge(current.mac_return_edge or "right")
         self.resistance_strip.set_value(current.crossing_resistance_px)
         module.body.addWidget(self.resistance_strip)
@@ -1772,6 +1801,13 @@ class WindowsApplication(QWidget):
         if self.server.listening:
             self.server.stop()
         self._config = config
+        if hasattr(self, "advanced_switch"):
+            self.advanced_switch.blockSignals(True)
+            self.advanced_switch.setChecked(config.advanced_crossing)
+            self.advanced_switch.blockSignals(False)
+            self.advanced_displays.setVisible(config.advanced_crossing)
+            self.basic_ways.setVisible(not config.advanced_crossing)
+            self.advanced_displays.rebuild()
         self._apply_input_scale(config)
         if not config.edge_glow:
             self._hide_crossing()
@@ -2315,6 +2351,8 @@ class WindowsApplication(QWidget):
         config = self._config
         if config is None:
             return return_edge.ReturnEdge(edge, resistance)
+        if config.advanced_crossing and config.peer_platform == "windows":
+            return display_layout.ScreenRoutes(config.screen_layout, desktop_win.displays(), config.crossing_resistance_px)
         methods = set(config.crossing_methods)
         if "part" in methods:
             return return_edge.PartEdge(edge, config.crossing_edge_parts, resistance)

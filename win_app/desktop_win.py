@@ -64,6 +64,26 @@ def monitors() -> List[Rect]:
     return found
 
 
+def displays():
+    """Stable Windows display-device names in the same space as cursor_position."""
+    _require()
+    class MonitorInfoEx(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT), ("rcWork", RECT),
+                    ("dwFlags", ctypes.c_ulong), ("szDevice", ctypes.c_wchar * 32)]
+    found = []
+    def collect(handle, _dc, _rect, _param):
+        info = MonitorInfoEx()
+        info.cbSize = ctypes.sizeof(info)
+        if user32.GetMonitorInfoW(handle, ctypes.byref(info)):
+            r = info.rcMonitor
+            found.append(dict(id=info.szDevice, x=r.left, y=r.top,
+                              width=r.right-r.left, height=r.bottom-r.top))
+        return 1
+    if not user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(collect), 0):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return sorted(found, key=lambda s: s["id"])
+
+
 def cursor_position() -> Tuple[int, int]:
     _require()
     point = POINT()
