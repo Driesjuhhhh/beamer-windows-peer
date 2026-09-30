@@ -69,7 +69,8 @@ setup(
             "argv_emulation": False,
             # cryptography ships a compiled _rust extension plus cffi; py2app's own recipe pulls
             # both in, but naming the package keeps its data files and submodules in the bundle.
-            "packages": ["rumps", "cryptography", "cffi"],
+            # PyNaCl (nacl) is the same shape: a compiled _sodium extension reached through cffi.
+            "packages": ["rumps", "cryptography", "cffi", "nacl"],
             # effects.py imports its fx_* modules by name at first use, which py2app's import scan
             # cannot see, so they are named here or the bundle ships without a single effect.
             "includes": [

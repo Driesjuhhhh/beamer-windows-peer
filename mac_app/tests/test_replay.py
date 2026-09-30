@@ -52,8 +52,13 @@ def replay(port, data):
     """Send `data` as a fresh connection and return every byte the responder sent back before it
     closed."""
     with socket.create_connection(("127.0.0.1", port), timeout=3.0) as attacker:
-        attacker.sendall(bytes(data))
-        attacker.shutdown(socket.SHUT_WR)
+        # A responder that refuses early closes before the whole recording is sent; what it
+        # said before closing is still in the buffer to read.
+        try:
+            attacker.sendall(bytes(data))
+            attacker.shutdown(socket.SHUT_WR)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         reply = bytearray()
         while True:
             try:

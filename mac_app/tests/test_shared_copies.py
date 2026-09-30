@@ -24,7 +24,10 @@ SHARED_MODULES = (
     "effects.py", "fx_ink.py", "fx_instrument.py", "fx_membrane.py", "fx_sparks.py", "fx_warp.py",
     "ignored.py", "pairing.py", "protocol.py", "receiver.py", "return_edge.py", "updates.py", "wol.py",
 )
-SHARED_TESTS = ("test_ignored.py", "test_shared_copies.py", "test_switch_arrival.py", "test_updates.py")
+SHARED_TESTS = (
+    "pairing_vectors.json", "test_ignored.py", "test_pairing_cpace.py", "test_shared_copies.py", "test_switch_arrival.py",
+    "test_updates.py",
+)
 
 
 def _digest(path):

@@ -2356,7 +2356,7 @@ class ControlWindow(AppKit.NSObject):
 
     @objc.python_method
     def _say(self, message, ink="ink_2"):
-        self.message_label.set(message, ink=ink)
+        self.message_label.set(self._shown(message), ink=ink)
 
     @objc.python_method
     def show(self):
@@ -2580,7 +2580,7 @@ class ControlWindow(AppKit.NSObject):
         paired = bool(cfg.auth_token)
         refused = state.key == "token"
         repairing = getattr(self, "_repairing", False)
-        peer = link_state.peer_name(cfg)
+        peer = self._shown(link_state.peer_name(cfg))
         motion.set_hidden(self.paired_module.view, not paired)
         motion.set_hidden(self.pair_module.view, paired and not refused and not repairing)
         self.paired_name.set(peer)
@@ -2741,15 +2741,19 @@ class ControlWindow(AppKit.NSObject):
                 self._say_pairing(f"{name} is not showing a code. Start pairing in Beamer on it, then try again.", "fault")
             elif reason == pairing.ERROR_REFUSED:
                 self._say_pairing("That code was not accepted, and the PC has cancelled it. Start pairing there again for a fresh one.", "fault")
+            elif reason == pairing.ERROR_VERSION:
+                self._say_pairing("The PC runs a different version of Beamer. Update Beamer on both machines, then pair again.", "fault")
             elif reason == "no_answer":
                 self._say_pairing(f"{name} did not answer. Check both machines are on the same network, then try again.", "fault")
             else:
                 self._say_pairing(f"Pairing failed: {reason}", "fault")
             return
+        # The name the exchange proved, not the one the beacon claimed.
+        token, name = result
         raw = config_to_raw(self.controller.cfg)
         raw["host"] = pc["address"]
         raw["port"] = pc["port"]
-        raw["auth_token"] = result
+        raw["auth_token"] = token
         raw["pc_name"] = name
         # The Mac has just exchanged packets with the PC, so its ARP entry is fresh.
         raw["mac_address"] = lookup_mac(pc["address"]) or ""
@@ -3295,7 +3299,7 @@ class TrayApp(rumps.App):
         except Exception:
             self.logger.exception("failed to beep for a user alert")
         try:
-            rumps.notification("Beamer", title, message)
+            rumps.notification("Beamer", title, pages.redact(message, self.controller.cfg.hide_addresses))
         except Exception:
             self.logger.exception("failed to show a user notification")
 
