@@ -377,9 +377,9 @@ class WindowsApplication(QWidget):
         self._page_indexes: dict = {}
         for key, name, purpose in pages_win.PAGES:
             scope = pages_win.SCOPE.get(key)
-            if key == "crossing" and current.peer_platform == "windows":
-                purpose = "Choose how input crosses to the other PC. Use Advanced mode to arrange all screens."
-                scope = "Advanced layouts are shared with the other PC after Apply layout. Resistance and shortcuts remain this PC's settings."
+            if key == "crossing":
+                purpose = "Choose how input crosses to the other computer. With two Windows PCs, Advanced mode arranges all screens."
+                scope = "Advanced layouts are shared after Apply layout. Resistance and shortcuts remain this PC's settings."
             scroll, layout = self._page_shell(name, purpose, scope)
             builders[key](layout, current)
             layout.addStretch(1)
@@ -678,13 +678,16 @@ class WindowsApplication(QWidget):
         self.basic_ways = self._ways_module(current)
         mode = widgets.Module("Ways in")
         self.advanced_switch = widgets.Switch("Advanced mode")
-        self.advanced_switch.setChecked(current.advanced_crossing)
+        advanced = current.advanced_crossing and current.peer_platform == "windows"
+        self.advanced_switch.setEnabled(current.peer_platform == "windows")
+        self.advanced_switch.setToolTip("Requires Windows Peer Beamer on both paired Windows PCs.")
+        self.advanced_switch.setChecked(advanced)
         mode.body.addWidget(self.advanced_switch)
         self.advanced_displays = AdvancedDisplays(self)
         mode.body.addWidget(self.advanced_displays)
         mode.body.addWidget(self.basic_ways)
-        self.advanced_displays.setVisible(current.advanced_crossing)
-        self.basic_ways.setVisible(not current.advanced_crossing)
+        self.advanced_displays.setVisible(advanced)
+        self.basic_ways.setVisible(not advanced)
         self.advanced_switch.toggled.connect(self._set_advanced_mode)
         layout.addWidget(mode)
         self.resistance_module = self._resistance_module(current)
@@ -1804,12 +1807,15 @@ class WindowsApplication(QWidget):
             self.server.stop()
         self._config = config
         if hasattr(self, "advanced_switch"):
+            advanced = config.advanced_crossing and config.peer_platform == "windows"
             self.advanced_switch.blockSignals(True)
-            self.advanced_switch.setChecked(config.advanced_crossing)
+            self.advanced_switch.setChecked(advanced)
+            self.advanced_switch.setEnabled(config.peer_platform == "windows")
             self.advanced_switch.blockSignals(False)
-            self.advanced_displays.setVisible(config.advanced_crossing)
-            self.basic_ways.setVisible(not config.advanced_crossing)
+            self.advanced_displays.setVisible(advanced)
+            self.basic_ways.setVisible(not advanced)
             self.advanced_displays.rebuild()
+            self.resistance_strip.peer_label = "Other PC" if config.peer_platform == "windows" else "Your Mac"
         self._apply_input_scale(config)
         if not config.edge_glow:
             self._hide_crossing()

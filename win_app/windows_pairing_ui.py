@@ -25,7 +25,8 @@ def pair_remote(address, code, discovery_factory=pairing.Discovery, timeout=10):
                 raise pairing.PairingError(discovery.error)
             pc = next((pc for pc in discovery.pcs() if pc["address"] == address and pc.get("pair_id")), None)
             if pc:
-                return discovery.pair(pc, code), pc["name"], pc["address"], pc["port"]
+                token, authenticated_name = discovery.pair(pc, code)
+                return token, authenticated_name, pc["address"], pc["port"]
             time.sleep(0.05)
         raise pairing.PairingError("No pairing code found. Press Show a code on the other PC and check the firewall.")
     finally:

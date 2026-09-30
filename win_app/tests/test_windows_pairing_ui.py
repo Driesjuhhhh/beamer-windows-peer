@@ -43,8 +43,8 @@ class DialogTests(unittest.TestCase):
 
     def test_join_returns_the_authenticated_peer_and_stops_discovery(self):
         discovery = Mock(error=None)
-        discovery.pcs.return_value = [dict(address="192.168.1.3", pair_id="id", name="PC B", port=24820)]
-        discovery.pair.return_value = "secure-token"
+        discovery.pcs.return_value = [dict(address="192.168.1.3", pair_id="id", name="Unauthenticated beacon name", port=24820)]
+        discovery.pair.return_value = ("secure-token", "PC B")
         with patch("windows_pairing_ui.is_this_machine", return_value=False):
             result = pair_remote("192.168.1.3", "123 456", lambda **kwargs: discovery)
         self.assertEqual(result, ("secure-token", "PC B", "192.168.1.3", 24820))

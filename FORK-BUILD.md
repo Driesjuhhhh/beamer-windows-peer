@@ -1,6 +1,6 @@
 # Windows Peer fork build
 
-The `windows-peer` branch starts at upstream `e5339fa82d4ba5c662fda920f441b2e70d6c9199` (Beamer 1.4.2). Version 1.4.5 identifies this experimental fork build. Upstream `main` is retained separately; newer upstream changes have not been merged into this branch.
+The `windows-peer` branch starts at upstream `e5339fa82d4ba5c662fda920f441b2e70d6c9199` (Beamer 1.4.2). Version 1.4.5 identifies this experimental fork build. The user's merge of upstream 1.4.3 (`4feead2`) is preserved, including the CPace pairing/security update and PyNaCl dependency. The Windows pairing UI/helper consume its `(token, authenticated_name)` result.
 
 Added features: Windows peer configuration, Windows receiver focus roles, Windows modifier mapping, in-app **Pair a Windows PC**, command-line pairing, and Windows pairing tests. The default peer remains Mac. Mac sources and shared protocol implementations are unchanged.
 
@@ -32,7 +32,7 @@ The MSI installs per user into `%LOCALAPPDATA%\Beamer Windows Peer`, with a sepa
 
 ## Validation and limits
 
-116 relevant pairing, sender, receiver and configuration tests passed for the UI revision. Qt was rendered offscreen and the new pairing button/dialog checked. Packaged Qt DLLs loaded through the Windows loader after the ICU packaging correction. The generated MSI cabinet was unpacked and all six payload hashes matched its source files; MSI costing and directory resolution succeeded.
+For the combined 1.4.5 revision, 181 relevant tests passed: sender (40), receiver (55), CPace (56), Windows pairing UI (7), Windows peer configuration/socket integration (6), display geometry (9) and the advanced editor (8). Qt was rendered offscreen and the new pairing button/dialog checked. Packaged Qt DLLs loaded through the Windows loader after the ICU packaging correction. The generated MSI cabinet was unpacked and all six payload hashes matched its source files; MSI costing and directory resolution succeeded.
 
 The earlier full suite had 567 passes, two skips and one pre-existing edge-glow hover test failure, reproduced on upstream. A later full-suite run did not complete in the restricted environment. Actual MSI installation, full frozen-app startup, two physical Windows PCs and a Mac build remain unverified. Windows peer support is experimental.
 

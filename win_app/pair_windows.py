@@ -63,7 +63,7 @@ def join_pair(path, current, address, edge):
         while time.monotonic() < deadline:
             if discovery.error:
                 raise pairing.PairingError(discovery.error)
-            pc = next((pc for pc in discovery.pcs() if pc.get("pair_id")), None)
+            pc = next((pc for pc in discovery.pcs() if pc.get("pair_id") and pc.get("address") == address), None)
             if pc:
                 break
             time.sleep(0.05)
@@ -72,8 +72,8 @@ def join_pair(path, current, address, edge):
         code = getpass("Code shown on the other PC: ").replace(" ", "")
         if len(code) != pairing.CODE_DIGITS or not code.isascii() or not code.isdigit():
             raise pairing.PairingError("enter the six-digit code")
-        token = discovery.pair(pc, code)
-        save_config(path, paired_config(current, token, pc["name"], pc["address"], edge, pc["port"]))
+        token, authenticated_name = discovery.pair(pc, code)
+        save_config(path, paired_config(current, token, authenticated_name, pc["address"], edge, pc["port"]))
     finally:
         discovery.stop()
 
