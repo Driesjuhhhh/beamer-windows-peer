@@ -1,3 +1,10 @@
+# Beamer Windows Peer fork
+
+Experimental Windows-to-Windows support with **Pair a Windows PC** in the app and a corrected Qt DLL package. This fork's `windows-peer` branch is based on upstream commit `e5339fa` (1.4.2); `VERSION` 1.4.4 is a local fork build number, not an upstream release.
+
+See [Windows pairing](WINDOWS-TO-WINDOWS.md) and [build instructions and validation limits](FORK-BUILD.md). The upstream download links below provide the original Mac/Windows releases.
+
+---
 <p align="center"><img src="Beamer.svg" width="96" height="96" alt=""></p>
 <h1 align="center">Beamer</h1>
 <p align="center">One keyboard and one mouse or trackpad for a Mac and a Windows PC on the same network, in either direction.</p>
@@ -25,6 +32,10 @@ Free, with no account. Every installer is on the [releases page](https://github.
 | Windows, through winget | `winget install KalkmanCode.Beamer` | The same installer, without the warning |
 
 ## Quick start
+
+**Local experimental Windows↔Windows build:** see
+[Windows-to-Windows setup and limitations](WINDOWS-TO-WINDOWS.md).
+The standard Mac↔Windows setup below remains the default.
 
 1. **Install on both machines.** On the Mac, drag Beamer to Applications, open it, and press the
    two Grant buttons on the Permissions page (Accessibility, then Input Monitoring), then Relaunch

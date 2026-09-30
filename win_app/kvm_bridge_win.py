@@ -61,6 +61,8 @@ import pages_win
 import protocol
 import receiver
 from receiver import ReceiverServer, ServerState
+from peer_receiver import PeerReceiver
+from windows_pairing_ui import WindowsPairDialog
 import return_edge
 import sender
 from sender import MacSender
@@ -240,6 +242,7 @@ class WindowsApplication(QWidget):
         # gets its token, so it cannot wait for the receiver to be listening.
         self.announcer = Announcer(self._announced_port, self.bridge.paired.emit, logger=LOGGER)
         self._code_shown = False
+        self._pairing_platform = "mac"
         self._code_addresses: list = []
         self._firewall_advice: Optional[firewall_win.Advice] = None
         self._firewall_status: Optional[firewall_win.FirewallStatus] = None
@@ -251,7 +254,7 @@ class WindowsApplication(QWidget):
         self._last_seen_state: Optional[ServerState] = None
         self.glow: Optional[EdgeGlow] = None
         self.effects: Optional[EffectOverlay] = None
-        self.server = ReceiverServer(
+        self.server = PeerReceiver(
             self._set_status,
             pressure_callback=lambda edge, pressure, crossed, part=None: self.bridge.pressure.emit(edge, pressure, crossed, part),
             # The Mac's notch crossing lands on this PC's bottom edge, and that is the only
@@ -1434,8 +1437,8 @@ class WindowsApplication(QWidget):
         self.paired_heading = widgets.label("", "tile-name", wrap=True)
         module.body.addWidget(self.paired_heading)
         self.pair_intro = widgets.label(
-            "Press Pair a Mac, then on your Mac choose this PC and type the six-digit code shown here. "
-            "You only do this once.",
+            "Choose Pair a Mac or Pair a Windows PC. For Windows, show a code on one PC "
+            "and enter it on the other. You only do this once.",
             "note",
             wrap=True,
         )
@@ -1449,6 +1452,10 @@ class WindowsApplication(QWidget):
         self.pair_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.pair_button.clicked.connect(self._toggle_pairing)
         module.body.addWidget(self.pair_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.windows_pair_button = QPushButton("Pair a Windows PC")
+        self.windows_pair_button.setProperty("vernier", "primary")
+        self.windows_pair_button.clicked.connect(self._pair_windows)
+        module.body.addWidget(self.windows_pair_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(module)
 
         self.code_module = widgets.Module("Pairing code")
@@ -1472,7 +1479,8 @@ class WindowsApplication(QWidget):
         self.code_module.body.addLayout(code_row)
         self.drain = widgets.Drain()
         self.code_module.body.addWidget(self.drain)
-        self.code_module.body.addWidget(widgets.label(PAIR_HINT, "note", wrap=True))
+        self.code_hint = widgets.label(PAIR_HINT, "note", wrap=True)
+        self.code_module.body.addWidget(self.code_hint)
         # Pairing by address, for a network whose broadcasts never reach the Mac.
         self.address_note = widgets.label("", "note", wrap=True)
         self.address_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -1508,8 +1516,33 @@ class WindowsApplication(QWidget):
             self._say_pairing(f"Pairing is not available: {self.announcer.error}", "note-fault")
             return
         self._say_pairing("", "note")
+        self._pairing_platform = "mac"
+        self.code_hint.setText(PAIR_HINT)
         self.announcer.begin_pairing()
         self._refresh_pairing()
+
+    def _pair_windows(self) -> None:
+        dialog = WindowsPairDialog(self, self._show_windows_code)
+        dialog.paired.connect(lambda token, name, address, port: self._finish_windows_pair(dialog, token, name, address, port), Qt.ConnectionType.QueuedConnection)
+        dialog.exec()
+
+    def _finish_windows_pair(self, dialog, token, name, address, port):
+        self._pairing_platform = "windows"
+        if self._on_paired(token, name, address, port):
+            dialog.accept()
+        else:
+            dialog._error("Paired, but settings could not be saved. Check the message in Overview.")
+
+    def _show_windows_code(self) -> bool:
+        if self.announcer.error:
+            self._say_pairing(f"Pairing is not available: {self.announcer.error}", "note-fault")
+            return False
+        self.announcer.cancel_pairing()
+        self._pairing_platform = "windows"
+        self.code_hint.setText("On the other PC, press Pair a Windows PC and enter this PC's address and code.")
+        self.announcer.begin_pairing()
+        self._refresh_pairing()
+        return True
 
     def _pairing_addresses(self) -> list:
         """The one address worth typing on the Mac: this PC's on the network that reaches the Mac
@@ -1547,7 +1580,7 @@ class WindowsApplication(QWidget):
                 motion.set_shown(self.code_module, True)
             # Every tick, so switching Hide addresses while a code is up applies at once.
             note = self._shown(
-                f"Not listed on the Mac? Type this PC's address there: {', '.join(self._code_addresses)}"
+                f"Other PC's IP address to enter: {', '.join(self._code_addresses)}"
             ) if self._code_addresses else ""
             if self.address_note.text() != note:
                 self.address_note.setText(note)
@@ -1574,7 +1607,7 @@ class WindowsApplication(QWidget):
         self.pair_note.setVisible(bool(text))
         widgets.set_role(self.pair_note, tone)
 
-    def _on_paired(self, token: str, mac_name: str, mac_address: str) -> None:
+    def _on_paired(self, token: str, mac_name: str, mac_address: str, peer_port=None) -> bool:
         current = self._config or default_config()
         host = self.host_entry.text().strip() or self._host
         if not host:
@@ -1588,24 +1621,34 @@ class WindowsApplication(QWidget):
             candidate = replace(
                 current,
                 host=host,
-                port=int(self.port_entry.text().strip() or current.port),
+                port=peer_port or int(self.port_entry.text().strip() or current.port),
                 auth_token=token,
                 paired_with=mac_name,
+                peer_platform=self._pairing_platform,
+                mac_host=mac_address,
+                mac_return_edge=("left" if peer_port else "right") if self._pairing_platform == "windows" else current.mac_return_edge,
+                arrangement_set_at=int(time.time()) if self._pairing_platform == "windows" else current.arrangement_set_at,
+                mac_hardware_address="",
             )
             save_config(self.config_path, candidate)
             self._apply_config(candidate)
         except (ConfigError, TypeError, ValueError, OSError) as exc:
             LOGGER.exception("Paired token could not be saved")
             self._say_pairing(f"Paired, but the token could not be saved: {exc}", "note-fault")
-            return
+            return False
         self._host = candidate.host
         self.host_entry.setText(candidate.host)
         self.token_entry.setText(token)
+        self.port_entry.setText(str(candidate.port))
+        self.edge_choice.set_value(candidate.mac_return_edge)
+        self._reflect_ways()
+        self._reflect_look()
         self._refresh_pairing()
         who = mac_name or "your Mac"
         self._show_paired(candidate.paired_with)
         self._say_pairing("Paired. The receiver restarted with the new token.", "note-live")
         LOGGER.info("Paired with %s", who)
+        return True
 
     # -- Connection -------------------------------------------------------------------------
 
@@ -2083,7 +2126,7 @@ class WindowsApplication(QWidget):
         """The Mac took input on this PC, or gave it back. Either way the
         outward edge follows: one of the two links owns the keyboard at a
         time, never both."""
-        self.sender.set_receiving(target == "windows")
+        self.sender.set_receiving(self.server.is_receiving_target(target))
 
     def _on_learned(self, host, edge, resistance) -> None:
         """The Mac's address and the way home it named in its hello. Saved, so
@@ -2340,7 +2383,13 @@ class WindowsApplication(QWidget):
         if detail != self.status_detail.text():
             self.status_detail.setText(detail)
         widgets.set_role(self.status_detail, "note-fault" if state is ServerState.ERROR else "note")
-        location = "On your Mac" if self.sender.redirecting else "On this PC"
+        peer = "Windows PC" if self._config and self._config.peer_platform == "windows" else "Mac"
+        self.mac_module.eyebrow.setText("Your " + peer)
+        self.allow_switch.setText(f"Your {peer} drives this PC")
+        self.send_switch.setText(f"This PC drives your {peer}")
+        self.drive_action.setText(f"Your {peer} drives this PC")
+        self.send_action.setText(f"This PC drives your {peer}")
+        location = f"On your {peer}" if self.sender.redirecting else "On this PC"
         if location != self.location_readout.text():
             self.location_readout.setText(location)
         trip = self.sender.round_trip_ms
@@ -2348,7 +2397,7 @@ class WindowsApplication(QWidget):
         if trip_text != self.round_trip_readout.text():
             self.round_trip_readout.setText(trip_text)
             self.round_trip_row.setVisible(trip is not None)
-        redirect_text = "Bring input back to this PC" if self.sender.redirecting else "Send input to your Mac"
+        redirect_text = "Bring input back to this PC" if self.sender.redirecting else f"Send input to your {peer}"
         if redirect_text != self.redirect_button.text():
             self.redirect_button.setText(redirect_text)
             self.redirect_action.setText(redirect_text)

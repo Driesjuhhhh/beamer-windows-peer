@@ -392,7 +392,8 @@ class MacSender:
     def _wire_name(self, name: str) -> str:
         """The capture names Ctrl "cmd" and the Windows key "ctrl", the Semantic style;
         Positional swaps them back, so each key arrives as the Mac key in its place."""
-        if self._setting("modifier_style", "semantic") == "positional":
+        if (self._setting("peer_platform", "mac") == "windows"
+                or self._setting("modifier_style", "semantic") == "positional"):
             return POSITIONAL_SWAP.get(name, name)
         return name
 

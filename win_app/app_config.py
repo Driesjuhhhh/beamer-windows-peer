@@ -120,6 +120,8 @@ class Config:
     # The window's own palette: follow Windows, or keep one. tokens.APPEARANCES is the home of
     # these three values.
     appearance: str = "system"
+    # Explicit opt-in: old configurations retain the Mac receiver and key mapping.
+    peer_platform: str = "mac"
 
 
 def migrated_port(value) -> int:
@@ -147,6 +149,8 @@ def default_config_path() -> Path:
 
 
 def validate_config(config: Config) -> None:
+    if config.peer_platform not in ("mac", "windows"):
+        raise ConfigError("peer_platform must be mac or windows")
     if not isinstance(config.host, str):
         raise ConfigError("host must be text")
     try:
@@ -276,6 +280,7 @@ def config_from_dict(raw: dict) -> Config:
             trigger_style=raw.get("trigger_style", "double_tap"),
             double_tap_ms=int(raw.get("double_tap_ms", 300)),
             modifier_style=raw.get("modifier_style", "semantic"),
+            peer_platform=raw.get("peer_platform", "mac"),
             block_while_dragging=raw.get("block_while_dragging", True),
             mac_hardware_address=raw.get("mac_hardware_address", "") or "",
             mac_host=raw.get("mac_host", "") or "",
@@ -341,6 +346,7 @@ def config_to_dict(config: Config) -> dict:
         "trigger_style": config.trigger_style,
         "double_tap_ms": int(config.double_tap_ms),
         "modifier_style": config.modifier_style,
+        "peer_platform": config.peer_platform,
         "block_while_dragging": config.block_while_dragging,
         "mac_hardware_address": config.mac_hardware_address,
         "mac_host": config.mac_host,
