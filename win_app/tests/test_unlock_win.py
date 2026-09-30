@@ -18,9 +18,10 @@ class FakeKernel32:
     is_locked() call so a test can script the console unlocking part-way
     through the poll loop."""
 
-    def __init__(self, locked_sequence, event_opens=True):
+    def __init__(self, locked_sequence, event_opens=True, lock_screen_session=1):
         self.locked_sequence = list(locked_sequence)
         self.event_opens = event_opens
+        self.lock_screen_session = lock_screen_session
         self.opened_names = []
         self.set_events = 0
         self.closed = 0
@@ -42,6 +43,10 @@ class FakeKernel32:
     def WTSGetActiveConsoleSessionId(self):
         return 1
 
+    def ProcessIdToSessionId(self, pid, session):
+        session._obj.value = self.lock_screen_session
+        return 1
+
     def OpenEventW(self, access, inherit, name):
         self.opened_names.append(name)
         return 99 if self.event_opens else None
@@ -58,6 +63,11 @@ class FakeKernel32:
 class IsLockedTests(unittest.TestCase):
     def test_logonui_running_means_locked(self):
         self.assertIs(unlock_win.is_locked(FakeKernel32([True])), True)
+
+    def test_a_lock_screen_in_another_session_is_not_this_consoles(self):
+        # The fix for issue #5 sends the Mac home on a lock, so a second account's lock screen or
+        # an RDP logon must not read as the console's: the PC could not be driven at all.
+        self.assertIs(unlock_win.is_locked(FakeKernel32([True], lock_screen_session=2)), False)
 
     def test_no_logonui_means_unlocked(self):
         self.assertIs(unlock_win.is_locked(FakeKernel32([False])), False)

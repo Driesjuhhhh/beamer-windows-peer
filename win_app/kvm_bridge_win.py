@@ -571,7 +571,7 @@ class WindowsApplication(QWidget):
             return
         if message.startswith("Cannot switch"):
             QApplication.beep()
-        self.tray.showMessage(title, message, QIcon(str(ICON_PATH)), 4000)
+        self.tray.showMessage(title, self._shown(message), QIcon(str(ICON_PATH)), 4000)
 
     def _on_mac_learned(self, address: str) -> None:
         if self._config is None or self._config.mac_hardware_address == address:
@@ -1596,6 +1596,8 @@ class WindowsApplication(QWidget):
         outcome = self.announcer.outcome
         if outcome == "refused":
             self._say_pairing("A wrong code was entered, so that code is cancelled. Pair again for a fresh one.", "note-fault")
+        elif outcome == "version":
+            self._say_pairing("The Mac runs a different version of Beamer. Update Beamer on both machines, then pair again.", "note-fault")
         elif outcome == "expired":
             self._say_pairing("The code expired. Pair again for a fresh one.", "note-amber")
         elif outcome is None:
@@ -2428,7 +2430,7 @@ class WindowsApplication(QWidget):
         # not connected, or the hooks failing to install -- and stays quiet in the boring case.
         send_hint = "" if self.sender.redirecting or self._sending_detail in (
             "Off", "Not connected to the Mac"
-        ) else self._sending_detail
+        ) else self._shown(self._sending_detail)
         if send_hint != self.send_hint.text():
             self.send_hint.setText(send_hint)
             # Hidden while empty, or its spacing leaves a gap between the two switches.

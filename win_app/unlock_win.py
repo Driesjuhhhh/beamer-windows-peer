@@ -91,10 +91,12 @@ if _IS_WINDOWS:
     kernel32.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESSENTRY32W)]
     kernel32.Process32NextW.restype = ctypes.c_int
     kernel32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.ProcessIdToSessionId.restype = ctypes.c_int
+    kernel32.ProcessIdToSessionId.argtypes = [ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
 
 
-def _running_process_names(mem32) -> Optional[set]:
-    """Every running process's image name, lowercased, or None if the
+def _running_processes(mem32) -> Optional[list]:
+    """Every running process as (lowercased image name, PID), or None if the
     snapshot could not be taken. Enumeration only reads names and PIDs, so it
     needs no privilege over the processes it lists -- LogonUI runs as SYSTEM
     and still shows up."""
@@ -106,14 +108,24 @@ def _running_process_names(mem32) -> Optional[set]:
         entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
         if not mem32.Process32FirstW(snapshot, ctypes.byref(entry)):
             return None
-        names = set()
+        processes = []
         while True:
-            names.add(entry.szExeFile.lower())
+            processes.append((entry.szExeFile.lower(), entry.th32ProcessID))
             if not mem32.Process32NextW(snapshot, ctypes.byref(entry)):
                 break
-        return names
+        return processes
     finally:
         mem32.CloseHandle(snapshot)
+
+
+def _in_console_session(mem32, pid: int, console: int) -> bool:
+    """Whether `pid` runs in the console's session. A LogonUI in another session -- a second
+    account's lock screen, an RDP logon -- is not this console's lock screen. A session that
+    cannot be read counts as the console's, as it did before this check existed."""
+    session = ctypes.c_ulong()
+    if not mem32.ProcessIdToSessionId(pid, ctypes.byref(session)):
+        return True
+    return session.value == console
 
 
 def is_locked(mem32=None) -> Optional[bool]:
@@ -125,13 +137,17 @@ def is_locked(mem32=None) -> Optional[bool]:
     if mem32 is None:
         return None
     try:
-        names = _running_process_names(mem32)
+        processes = _running_processes(mem32)
+        if processes is None:
+            return None
+        console = mem32.WTSGetActiveConsoleSessionId()
+        return any(
+            name == LOCK_SCREEN_PROCESS and _in_console_session(mem32, pid, console)
+            for name, pid in processes
+        )
     except Exception:
         LOGGER.exception("Could not enumerate processes to test for the lock screen")
         return None
-    if names is None:
-        return None
-    return LOCK_SCREEN_PROCESS in names
 
 
 def signal_unlock(mem32=None) -> bool:
