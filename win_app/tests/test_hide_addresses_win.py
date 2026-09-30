@@ -40,6 +40,25 @@ class HideAddressesWindowTest(unittest.TestCase):
         self.assertTrue(self.window.hide_switch.isChecked())
         self.assertEqual(self.window.host_entry.echoMode(), QLineEdit.EchoMode.Password)
 
+    def test_the_directions_note_hides_the_macs_address(self):
+        # The feature shoot, 29-09-2026: with it on, the note under Send input to your Mac still
+        # read "Connected to the Mac at" and its address.
+        self.config.write_text(json.dumps(dict(self.raw, hide_addresses=True)))
+        self.window.reload_config()
+        self.window._sending_detail = "Connected to the Mac at 192.0.2.10"
+        self.window._refresh_window()
+        self.assertIn("Connected to the Mac at", self.window.send_hint.text())
+        self.assertNotIn("192.0.2.10", self.window.send_hint.text())
+
+    def test_a_tray_alert_hides_the_macs_address(self):
+        # "Cannot switch — <status>" carries the sender's status, which can name the Mac's address.
+        self.config.write_text(json.dumps(dict(self.raw, hide_addresses=True)))
+        self.window.reload_config()
+        shown = []
+        self.window.tray.showMessage = lambda title, message, *rest: shown.append(message)
+        self.window._on_alert("Beamer", "Cannot switch — Connected to the Mac at 192.0.2.10")
+        self.assertEqual(shown, ["Cannot switch — Connected to the Mac at •••"])
+
 
 if __name__ == "__main__":
     unittest.main()

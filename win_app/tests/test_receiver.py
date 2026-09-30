@@ -939,12 +939,13 @@ class ReceiverHandBackTests(unittest.TestCase):
     so the receiver raises it: otherwise this machine keeps treating the peer
     as driving and its own edge and shortcut stay dead."""
 
-    def _session(self, focuses):
+    def _session(self, focuses, unlock=None):
         server = ReceiverServer(
             lambda state, detail: None,
             clipboard=FakeClipboard(text=""),
             desktop=FakeDesktop([Rect(0, 0, 1920, 1080)], cursor=(500, 500)),
             focus_callback=focuses.append,
+            unlock=unlock,
         )
         client, connection, address = connected_socket_pair()
         stop_event = threading.Event()
@@ -987,6 +988,104 @@ class ReceiverHandBackTests(unittest.TestCase):
             client.settimeout(1.0)
             self.assertEqual(client.recv(), protocol.switch_msg("mac"))
             self.assertIsNone(server.return_edge)
+        finally:
+            client.close()
+            thread.join(timeout=2.0)
+            connection.close()
+
+    def _next_switch(self, client, seconds):
+        # Pings keep the session inside its read timeout, as the Mac's would.
+        client.settimeout(0.2)
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            client.send(protocol.ping_msg())
+            try:
+                message = client.recv()
+            except socket.timeout:
+                continue
+            except OSError:
+                return None
+            if message.get("type") == protocol.MSG_SWITCH:
+                return message
+        return None
+
+    def test_a_pc_that_locks_while_the_peer_drives_sends_its_input_home(self):
+        # Issue #5, 30-09-2026: Windows locked while the Mac drove it, and the Mac's pointer was
+        # stuck on the lock screen, where Beamer cannot inject or watch the return edge, until
+        # the PC was unlocked by hand.
+        class Lock:
+            locked = False
+
+            def is_locked(self):
+                return self.locked
+
+            def ensure_unlocked(self):
+                return False
+
+        lock = Lock()
+        focuses = []
+        server, client, connection, thread = self._session(focuses, unlock=lock)
+        try:
+            client.send(self._focus("windows", return_edge="left", resistance_px=100))
+            wait_for_calls(focuses, minimum=1)
+            self.assertIsNone(self._next_switch(client, 0.8))
+            lock.locked = True
+            self.assertEqual(self._next_switch(client, 3.0), protocol.switch_msg("mac"))
+        finally:
+            client.close()
+            thread.join(timeout=2.0)
+            connection.close()
+
+    def test_switching_to_a_locked_pc_that_cannot_unlock_sends_the_input_straight_back(self):
+        # The same trap from the other side: with no unlock provider, a switch to a PC already on
+        # its lock screen pointed the Mac's input at nothing.
+        class Locked:
+            def is_locked(self):
+                return True
+
+            def ensure_unlocked(self):
+                return False
+
+        focuses = []
+        server, client, connection, thread = self._session(focuses, unlock=Locked())
+        try:
+            client.send(self._focus("windows", return_edge="left", resistance_px=100))
+            wait_for_calls(focuses, minimum=1)
+            self.assertEqual(self._next_switch(client, 3.0), protocol.switch_msg("mac"))
+        finally:
+            client.close()
+            thread.join(timeout=2.0)
+            connection.close()
+
+    def test_a_slow_arrival_on_a_locked_pc_still_gets_its_unlock(self):
+        # The lock check runs on the ACK thread. When the arrival itself took a second, it saw a
+        # locked PC with the peer driving and sent the input home before the unlock was asked for.
+        class Unlockable:
+            locked = True
+            asked = 0
+
+            def is_locked(self):
+                return self.locked
+
+            def ensure_unlocked(self):
+                self.asked += 1
+                self.locked = False
+                return True
+
+        class SlowOwner(list):
+            def append(self, target):
+                if target == "windows":
+                    time.sleep(1.4)
+                super().append(target)
+
+        lock = Unlockable()
+        focuses = SlowOwner()
+        server, client, connection, thread = self._session(focuses, unlock=lock)
+        try:
+            client.send(self._focus("windows", return_edge="left", resistance_px=100))
+            self.assertIsNone(self._next_switch(client, 3.0))
+            self.assertEqual(lock.asked, 1)
+            self.assertEqual(focuses, ["windows"])
         finally:
             client.close()
             thread.join(timeout=2.0)

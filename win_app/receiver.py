@@ -29,6 +29,7 @@ ACK_IDLE_SECONDS = 0.4
 ACK_COALESCE_SECONDS = 0.015
 HELLO_TIMEOUT_SECONDS = 5.0
 SESSION_READ_TIMEOUT_SECONDS = 2.5
+LOCK_CHECK_SECONDS = 0.5
 INJECTION_ERROR_STATUS_INTERVAL_SECONDS = 5.0
 # Windows hands the port back only when whatever holds it lets go — WinNAT's
 # dynamic reservations move on every reboot and can land on ours — so a bind
@@ -236,6 +237,15 @@ class ReceiverServer:
         # seconds, and replaying seconds of stale mouse moves and keystrokes
         # onto the desktop the moment it appears is worse than losing them.
         self._unlocking = threading.Event()
+        # When the console was last tested for the lock screen and first seen on it while the peer
+        # drives this PC, and whether its input has been sent home for that lock. See
+        # _home_if_locked.
+        self._lock_checked_at = float("-inf")
+        self._locked_since = None
+        self._sent_home_for_lock = False
+        # Set from the moment a focus brings the peer's input here until the unlock it may need
+        # has been asked for, so the lock check cannot act in between. See _handle_focus.
+        self._arriving = threading.Event()
         # `clipboard` defaults to the real clipboard_win module, imported
         # lazily (not at module load) so receiver.py stays importable -- and
         # its non-clipboard logic testable -- on a machine without
@@ -689,11 +699,43 @@ class ReceiverServer:
                     client_stop.set()
                     self._close_socket(connection)
                     return
+                self._home_if_locked()
         except Exception as exc:
             LOGGER.exception("ACK thread failed")
             self._set_status(ServerState.ERROR, f"ACK worker failed: {exc}")
             client_stop.set()
             self._close_socket(connection)
+
+    def _home_if_locked(self) -> None:
+        """Send the peer's input home when this PC is on its lock screen. Beamer can neither inject
+        into the secure desktop nor watch the return edge there, so a Mac left driving a locked PC
+        had no way back until someone unlocked it by hand (issue #5).
+
+        Timed, not per tick: the ACK thread wakes on every injected event, and is_locked walks the
+        process list. Locked on two checks LOCK_CHECK_SECONDS apart, and never while an unlock is
+        in flight: a switch to a locked PC reaches _begin_unlock a moment after focus, and an
+        unlock provider that can clear the lock screen must be given the chance."""
+        if not self._peer_driving or self._unlocking.is_set() or self._arriving.is_set():
+            self._locked_since = None
+            return
+        now = time.monotonic()
+        if now - self._lock_checked_at < LOCK_CHECK_SECONDS:
+            return
+        self._lock_checked_at = now
+        try:
+            locked = self._unlock_module().is_locked() is True
+        except Exception:
+            locked = False
+        if not locked:
+            self._locked_since = None
+            return
+        if self._locked_since is None:
+            self._locked_since = now
+            return
+        if self._sent_home_for_lock:
+            return
+        LOGGER.info("Windows is locked while the %s drives it; sending its input home", self._peer_name)
+        self._sent_home_for_lock = self.send_home()
 
     def _clipboard_module(self):
         if self._clipboard is not None:
@@ -823,6 +865,9 @@ class ReceiverServer:
             return
         if target == self._self_target:
             self._peer_driving = True
+            self._sent_home_for_lock = False
+            # A lock seen on the last visit says nothing about this one.
+            self._locked_since = None
         elif target == self._peer_target:
             self._peer_driving = False
         try:
@@ -1026,12 +1071,21 @@ class ReceiverServer:
             # chord with the first local keystroke.
             self._drop_return()
             self._release_peer_keys()
-        self._notify_focus(target)
         if target == self._self_target:
-            self._arm_return(data)
-            self._place_pointer(data)
-            self._begin_unlock(peer, host)
+            # Raised before anyone hears the peer is driving, and held until the unlock has been
+            # asked for. Placing the pointer or an owner's callback can take a second, and in
+            # that second the lock check saw a locked PC with the peer driving and sent its
+            # input home before the provider that could have unlocked it was tried.
+            self._arriving.set()
+            try:
+                self._notify_focus(target)
+                self._arm_return(data)
+                self._place_pointer(data)
+                self._begin_unlock(peer, host)
+            finally:
+                self._arriving.clear()
             return
+        self._notify_focus(target)
         if target != self._peer_target:
             return
         clipboard = self._clipboard_module()

@@ -12,7 +12,7 @@ analysis = Analysis(
     binaries=[],
     datas=[(str(source_dir / "Beamer.ico"), "."), (str(source_dir / "assets"), "assets"), (str(source_dir.parent / "VERSION"), ".")],
     # effects.py imports its fx_* modules by name, which PyInstaller's analysis cannot see.
-    hiddenimports=["cryptography"] + sorted(path.stem for path in source_dir.glob("fx_*.py")),
+    hiddenimports=["cryptography", "nacl", "_cffi_backend"] + sorted(path.stem for path in source_dir.glob("fx_*.py")),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

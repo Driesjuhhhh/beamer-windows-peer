@@ -60,6 +60,19 @@ class HideAddressesWindowTests(unittest.TestCase):
         self.assertEqual(self.window.find_field.stringValue(), "192.0.2.10")
         self.assertFalse(self.window.find_boxes[0].isHidden())
 
+    def test_the_footer_hides_an_address_in_a_failed_switch(self):
+        # Codex, 29-09-2026: a failed switch put the connection status, which names the PC's
+        # address, in the footer as it was.
+        self.window._say("Connecting to 192.0.2.20:24820", "fault")
+        self.assertNotIn("192.0.2.20", self.window.message_label.view.stringValue())
+
+    def test_an_unnamed_pc_is_not_named_by_its_address(self):
+        # peer_name falls back to the address when the PC has no name.
+        self.window.controller.cfg.pc_name = ""
+        self.window._refresh_paired(mock.Mock(key="token"))
+        self.assertNotIn("192.0.2.20", self.window.paired_name.view.stringValue())
+        self.assertNotIn("192.0.2.20", self.window.paired_note.view.stringValue())
+
 
 class ReloadTests(unittest.TestCase):
     def test_a_reload_sets_the_controller_before_the_window_reads_it(self):
@@ -73,6 +86,16 @@ class ReloadTests(unittest.TestCase):
         with mock.patch.object(kvm_bridge_app, "config_to_raw", return_value={}):
             kvm_bridge_app.TrayApp.reload_config(tray, None)
         self.assertEqual(calls, ["controller", "window"])
+
+
+class NotificationTests(unittest.TestCase):
+    def test_a_notification_hides_the_pcs_address(self):
+        tray = mock.Mock()
+        tray.controller.cfg.hide_addresses = True
+        with mock.patch.object(kvm_bridge_app.rumps, "notification") as notification, \
+                mock.patch.object(kvm_bridge_app.AppKit, "NSBeep"):
+            kvm_bridge_app.TrayApp._notify_user_main(tray, "Cannot switch", "Connecting to 192.0.2.20:24820")
+        self.assertNotIn("192.0.2.20", notification.call_args.args[2])
 
 
 if __name__ == "__main__":

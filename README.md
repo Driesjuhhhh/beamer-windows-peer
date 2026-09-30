@@ -320,8 +320,9 @@ settings show the measured round trip while input is on the PC.
 <summary><strong>Security</strong></summary>
 
 Both apps derive a key from the shared token with HKDF-SHA256 and seal every frame with
-ChaCha20-Poly1305. The token is never sent. Pairing agrees a token over X25519, with each side
-proving it knows the six-digit code. What that does and does not protect against is in
+ChaCha20-Poly1305. The token is never sent. Pairing agrees a token with CPace, a
+password-authenticated key exchange over X25519, from the six-digit code, so nothing sent while
+pairing can be tested against a list of codes. What that does and does not protect against is in
 [SECURITY.md](SECURITY.md).
 
 </details>
