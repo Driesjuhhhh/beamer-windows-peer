@@ -1,0 +1,47 @@
+BEAMER WINDOWS PEER - EXPERIMENTELE WINDOWS-NAAR-WINDOWS-VERSIE
+
+1. Installeer Beamer-Windows-Peer-UI-1.4.5.msi op beide Windows-pc's.
+   De app komt in %LOCALAPPDATA%\Beamer Windows Peer.
+   In het Startmenu staat de map Beamer Windows Peer.
+
+2. Sluit de oude Beamer voor je de installer uitvoert. Start daarna de nieuwe
+   Beamer op beide pc's. Op Overview staat nu 'Pair a Windows PC'.
+   Op de linker pc: klik die knop en kies 'Show a code on this PC'.
+   Op de rechter pc: klik dezelfde knop, vul het IP-adres en de code van de
+   linker pc in en kies 'Pair with this Windows PC'. De code is 60 seconden geldig.
+
+3. Start 'Beamer Windows Peer' op beide pc's. Bevestig de beheerdersvraag.
+   Dubbel tik op Right Ctrl, of duw de cursor door de rand tussen de pc's.
+
+Voor een andere opstelling gebruik je Pair-Beamer.exe in een terminal,
+met --edge left, right, top of bottom. Voorbeeld:
+  Pair-Beamer.exe host --edge top
+  Pair-Beamer.exe join --address 192.168.1.20 --edge bottom
+
+BELANGRIJK
+- Deze installer bevat de lokaal aangepaste versie, geen officiële release.
+- Pairing vervangt de eerdere peer en token in je Beamer-configuratie.
+  Bestaande voorkeuren blijven behouden. Sluit Beamer eerst af.
+- De configuratie blijft %LOCALAPPDATA%\Beamer\config.json. De nieuwe app
+  deelt die met de officiële app; draai die twee niet tegelijkertijd.
+- De bestaande 'Pair a Mac'-knop blijft voor Mac-koppeling. Voor twee
+  Windows-pc's gebruik je 'Pair a Windows PC' rechtstreeks in Overview.
+- Deze MSI vervangt de vorige lokale 1.4.2-MSI. Het versienummer in de app is nu eveneens 1.4.5. De publieke versie van Beamer
+  is niet 1.4.5: dat nummer wordt hier alleen voor de lokale MSI-upgrade gebruikt.
+- Sommige teksten en diagrammen zeggen nog Mac; daarmee wordt de andere
+  pc bedoeld. Ctrl blijft Ctrl en de Windows-toets blijft de Windows-toets.
+- Schakel automatische upstream-updatechecks uit voor deze lokale build.
+- Op beide pc's moet Beamer TCP 24820 en de pairing-helper UDP 24821 mogen
+  ontvangen op het vertrouwde netwerk. Windows Firewall kan daarover vragen.
+- De zes nieuwe integratietests en beide programma-builds slagen. Een fysieke
+  twee-pc-test is nog niet uitgevoerd. Eén upstream-animatietest faalt ook
+  in de ongewijzigde broncode.
+- Geen automatische start bij aanmelden ingesteld door deze MSI-installer.
+- Verwijderen kan via Windows Instellingen > Apps. Je configuratie blijft
+  bewaard; gedeelde Beamer-firewallregels worden niet verwijderd.
+
+Broncode: de officiële GPL-3.0-repo https://github.com/kalkman-code/beamer,
+met de meegeleverde lokale wijzigingen. LICENSE is in de app-map opgenomen.
+
+ADVANCED CROSSING (1.4.5)
+Installeer deze versie op beide Windows-pc's. Ga naar Crossing > Ways in > Advanced mode. Identify toont vijf seconden nummers op de schermen. Sleep de schermen zodat hun randen raken en druk Apply layout. De indeling wordt ook naar de andere pc gestuurd. Alleen de twee gekoppelde pc's worden ondersteund; Windows-scherminstellingen worden niet gewijzigd.

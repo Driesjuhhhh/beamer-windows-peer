@@ -32,6 +32,7 @@ from typing import Callable, Optional
 import ignored
 import protocol
 import return_edge
+import display_layout
 import wol
 
 LOGGER = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ PING_INTERVAL_SECONDS = 1.0
 OUTBOUND_QUEUE_SIZE = 2048
 MONITORS_MAX_AGE_SECONDS = 1.0
 
-CONTROL_MESSAGE_TYPES = frozenset({protocol.MSG_FOCUS, protocol.MSG_CLIPBOARD})
+CONTROL_MESSAGE_TYPES = frozenset({protocol.MSG_FOCUS, protocol.MSG_CLIPBOARD, display_layout.MESSAGE})
 _LOCAL_CLIPBOARD_SENTINEL_TYPE = "_local_clipboard"
 _GATE_EXEMPT_TYPES = CONTROL_MESSAGE_TYPES | {_LOCAL_CLIPBOARD_SENTINEL_TYPE}
 # A key-up owed to the Mac for a key that went down there, queued as input
@@ -392,7 +393,8 @@ class MacSender:
     def _wire_name(self, name: str) -> str:
         """The capture names Ctrl "cmd" and the Windows key "ctrl", the Semantic style;
         Positional swaps them back, so each key arrives as the Mac key in its place."""
-        if self._setting("modifier_style", "semantic") == "positional":
+        if (self._setting("peer_platform", "mac") == "windows"
+                or self._setting("modifier_style", "semantic") == "positional"):
             return POSITIONAL_SWAP.get(name, name)
         return name
 
@@ -516,7 +518,8 @@ class MacSender:
                 self._receiving = False
             # The model names the edge on the far side, not the one just left:
             # it is the same border, read from the other end.
-            self.set_redirecting(True, arrival_edge=outcome.edge, offset=outcome.offset)
+            self.set_redirecting(True, arrival_edge=outcome.edge, offset=outcome.offset,
+                                 target_display=getattr(model, "target_display", None))
 
     def _still_dragging(self) -> bool:
         """A release the hook never saw -- let go over the secure desktop or an elevated window --
@@ -532,7 +535,7 @@ class MacSender:
 
     # -- switching ----------------------------------------------------------
 
-    def set_redirecting(self, value, arrival_edge=None, offset=None, came_home=True) -> bool:
+    def set_redirecting(self, value, arrival_edge=None, offset=None, came_home=True, target_display=None) -> bool:
         """`arrival_edge` is the Mac edge the pointer arrives at and `offset`
         the fraction along it -- the same fraction it left this PC at, which
         is what makes one border out of two screens. Both are absent when the
@@ -566,15 +569,16 @@ class MacSender:
             self._pin_point = self._desktop_module().cursor_position()
             arrival = arrival_edge if arrival_edge in return_edge.EDGES else None
             self._enqueue_control({"type": _LOCAL_CLIPBOARD_SENTINEL_TYPE, "data": {}})
-            self._enqueue_control(
-                protocol.focus_msg(
+            focus = protocol.focus_msg(
                     "mac",
                     edge=arrival,
                     offset=offset,
                     return_edge=arrival or self._mac_arrival_edge(),
                     resistance_px=int(self._resistance()),
                 )
-            )
+            if target_display is not None:
+                focus["data"]["display_id"] = target_display
+            self._enqueue_control(focus)
             LOGGER.info("redirecting input to the Mac")
         else:
             # The flag first, so the hook thread stops adding keys; then
@@ -631,7 +635,12 @@ class MacSender:
         if crossed:
             try:
                 desktop = self._desktop_module()
-                x, y = return_edge.arrival_position(self._cached_monitors(), edge, offset)
+                position = None
+                if self._setting("peer_platform", "mac") == "windows" and isinstance(data.get("display_id"), str):
+                    position = display_layout.arrival(desktop.displays(), data["display_id"], edge, offset)
+                    if position is None:
+                        return  # Disconnected screen: keep the pointer on this PC.
+                x, y = position or return_edge.arrival_position(self._cached_monitors(), edge, offset)
                 desktop.set_cursor_position(x, y)
             except Exception:
                 LOGGER.exception("Could not place the pointer at the %s edge on arrival", edge)
@@ -901,12 +910,23 @@ class MacSender:
                 self._connection_failed(f"Inbound message from the Mac failed: {exc}", expected_socket=sock)
                 active_socket = None
 
+    def send_display_control(self, data):
+        if not self.connected or self._setting("peer_platform", "mac") != "windows":
+            return False
+        self._enqueue_control({"type": display_layout.MESSAGE, "data": data})
+        return True
+
     def _handle_inbound(self, message) -> None:
         message_type = message.get("type")
         if not isinstance(message_type, str) or not message_type:
             raise protocol.ProtocolError(f"malformed inbound message: {message!r}")
         with self._sequence_lock:
             self._last_ack_at = self._clock()
+        if message_type == display_layout.MESSAGE:
+            callback = getattr(self, "display_control", None)
+            if callback is not None and self._setting("peer_platform", "mac") == "windows":
+                callback(message.get("data"))
+            return
         if message_type == protocol.MSG_ACK:
             self._record_ack(message)
             return
@@ -1064,6 +1084,10 @@ class MacSender:
         and nothing else re-arms it."""
         methods = self._methods()
         resistance = int(self._resistance())
+        if self._setting("advanced_crossing", False) and self._setting("peer_platform", "mac") == "windows":
+            self._edge_model = display_layout.ScreenRoutes(self._setting("screen_layout", []), self._desktop_module().displays(), resistance)
+            self._corner_model = None
+            return
         if self._edge is None:
             self._edge_model = self._corner_model = None
             return

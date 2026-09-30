@@ -1,0 +1,9 @@
+{
+  "host": "192.168.1.20",
+  "port": 24820,
+  "auth_token": "REPLACE_WITH_THE_SAME_RANDOM_TOKEN_ON_BOTH_PCS",
+  "peer_platform": "windows",
+  "mac_host": "192.168.1.21",
+  "mac_return_edge": "right",
+  "paired_with": "Other Windows PC"
+}
